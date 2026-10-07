@@ -1,0 +1,26 @@
+{
+    "name": "acuity-report/availability-report",
+    "description": "Command-line report of Acuity Scheduling calendar availability as a self-contained HTML page",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.3",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "AcuityReport\\": "src/",
+            "AcuityReport\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^12.5"
+    }
+}
