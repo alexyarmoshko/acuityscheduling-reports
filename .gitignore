@@ -1,0 +1,10 @@
+.env
+.DS_Store
+Thumbs.db
+.playwright-mcp/
+installation/
+build/
+vendor/
+node_modules/
+.phpunit.cache/
+coverage/
