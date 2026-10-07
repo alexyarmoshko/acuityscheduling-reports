@@ -1,4 +1,7 @@
 .env
+/config.php
+/out/
+/spike/
 .DS_Store
 Thumbs.db
 .playwright-mcp/
