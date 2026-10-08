@@ -12,7 +12,7 @@ use RuntimeException;
 /**
  * Read-only Acuity Scheduling API v1 client.
  *
- * GET is the only operation it offers. Requests are throttled below Acuity's
+ * GET of a JSON list is the only operation it offers. Requests are throttled below Acuity's
  * documented limit of 10 per second. 429/5xx responses and network errors are
  * retried.
  */
@@ -48,24 +48,14 @@ final class AcuityClient
     }
 
     /**
-     * @param array<string, scalar> $query
-     * @return array<mixed> the decoded JSON body (an array or object)
-     */
-    public function get(string $path, array $query = []): array
-    {
-        return $this->fetch($path, $query, false);
-    }
-
-    /**
-     * Like get(), but the response must be a JSON array (list) at its root.
+     * GET $path; the response must be a JSON array (list) at its root.
      *
      * @param array<string, scalar> $query
      * @return list<mixed>
      */
     public function getList(string $path, array $query = []): array
     {
-        /** @var list<mixed> */
-        return $this->fetch($path, $query, true);
+        return $this->fetch($path, $query);
     }
 
     public function requestCount(): int
@@ -75,9 +65,9 @@ final class AcuityClient
 
     /**
      * @param array<string, scalar> $query
-     * @return array<mixed>
+     * @return list<mixed>
      */
-    private function fetch(string $path, array $query, bool $expectList): array
+    private function fetch(string $path, array $query): array
     {
         if (preg_match('#\A(/[a-z][a-z-]*)+\z#', $path) !== 1) {
             throw new RuntimeException('Invalid API path (not shown)');
@@ -105,7 +95,7 @@ final class AcuityClient
             $status = $response['status'];
 
             if ($status >= 200 && $status < 300) {
-                return $this->decode($path, $response['body'], $expectList);
+                return $this->decode($path, $response['body']);
             }
 
             $retryable = $status === 429 || $status >= 500;
@@ -162,24 +152,20 @@ final class AcuityClient
         return (float) (2 ** $attempt); // 1, 2, 4 seconds
     }
 
-    /** @return array<mixed> */
-    private function decode(string $path, #[\SensitiveParameter] string $body, bool $expectList): array
+    /** @return list<mixed> */
+    private function decode(string $path, #[\SensitiveParameter] string $body): array
     {
         // Checked on the raw text: associative decoding cannot tell `{}` or
-        // `{"0": ...}` from a list.
-        if ($expectList && !str_starts_with(ltrim($body), '[')) {
+        // `{"0": ...}` from a list. Valid JSON starting with `[` is a list.
+        if (!str_starts_with(ltrim($body), '[')) {
             throw new RuntimeException("GET {$path}: expected a JSON list");
         }
         try {
-            $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+            /** @var list<mixed> */
+            return json_decode($body, true, 512, JSON_THROW_ON_ERROR);
         } catch (JsonException) {
             throw new RuntimeException("GET {$path}: response is not valid JSON");
         }
-        if (!is_array($data)) {
-            throw new RuntimeException("GET {$path}: expected a JSON array or object");
-        }
-
-        return $data;
     }
 
     private function errorMessage(string $path, int $status, bool $retried): string

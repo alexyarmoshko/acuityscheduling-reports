@@ -40,7 +40,7 @@ final class AcuityClientTest extends TestCase
     {
         $this->transport->push(200, [['date' => '2026-11-02']]);
 
-        $data = $this->client()->get('/availability/dates', ['month' => '2026-11', 'timezone' => 'Europe/London']);
+        $data = $this->client()->getList('/availability/dates', ['month' => '2026-11', 'timezone' => 'Europe/London']);
 
         self::assertSame([['date' => '2026-11-02']], $data);
         self::assertSame(
@@ -57,7 +57,7 @@ final class AcuityClientTest extends TestCase
         );
         sort($methods);
 
-        self::assertSame(['__construct', 'get', 'getList', 'requestCount'], $methods);
+        self::assertSame(['__construct', 'getList', 'requestCount'], $methods);
     }
 
     public function testRejectsInvalidPathWithoutRequest(): void
@@ -65,7 +65,7 @@ final class AcuityClientTest extends TestCase
         $this->transport->push(200, []);
 
         try {
-            $this->client()->get('https://example.com/' . self::KEY);
+            $this->client()->getList('https://example.com/' . self::KEY);
             self::fail('Expected exception');
         } catch (RuntimeException $e) {
             self::assertSame('Invalid API path (not shown)', $e->getMessage());
@@ -73,26 +73,24 @@ final class AcuityClientTest extends TestCase
         self::assertSame([], $this->transport->urls);
     }
 
-
-
     public function testPacesRequestsToEightPerSecond(): void
     {
         $this->transport->push(200, [])->push(200, [])->push(200, []);
         $client = $this->client();
 
-        $client->get('/calendars');
-        $client->get('/calendars');
+        $client->getList('/calendars');
+        $client->getList('/calendars');
         $this->now += 1.0; // a slow caller needs no pause
-        $client->get('/calendars');
+        $client->getList('/calendars');
 
         self::assertEqualsWithDelta([0.125], $this->sleeps, 1e-9);
     }
 
     public function testRetries429HonouringRetryAfter(): void
     {
-        $this->transport->push(429, '', ['retry-after' => '3'])->push(200, ['ok' => true]);
+        $this->transport->push(429, '', ['retry-after' => '3'])->push(200, [['ok' => true]]);
 
-        self::assertSame(['ok' => true], $this->client()->get('/calendars'));
+        self::assertSame([['ok' => true]], $this->client()->getList('/calendars'));
         self::assertContains(3.0, $this->sleeps);
         self::assertCount(2, $this->transport->urls);
     }
@@ -102,7 +100,7 @@ final class AcuityClientTest extends TestCase
         $this->transport->push(429, '', ['retry-after' => '3600'])->push(200, []);
 
         try {
-            $this->client()->get('/calendars');
+            $this->client()->getList('/calendars');
             self::fail('Expected exception');
         } catch (RuntimeException $e) {
             self::assertStringContainsString('asked to wait 3600 s', $e->getMessage());
@@ -123,7 +121,7 @@ final class AcuityClientTest extends TestCase
             static fn (): int => (new \DateTimeImmutable('2026-10-08 12:00:00 UTC'))->getTimestamp(),
         );
 
-        $client->get('/calendars');
+        $client->getList('/calendars');
 
         self::assertContains(5.0, $this->sleeps);
     }
@@ -144,7 +142,7 @@ final class AcuityClientTest extends TestCase
             $this->sleeps[] = $s;
         });
 
-        self::assertSame([], $client->get('/calendars'));
+        self::assertSame([], $client->getList('/calendars'));
         self::assertSame(3, $transport->calls);
     }
 
@@ -154,7 +152,7 @@ final class AcuityClientTest extends TestCase
         $this->transport->push(400, ['message' => "Bad auth: Basic {$encoded} for 12345 " . self::KEY]);
 
         try {
-            $this->client()->get('/calendars');
+            $this->client()->getList('/calendars');
             self::fail('Expected exception');
         } catch (RuntimeException $e) {
             self::assertStringNotContainsString($encoded, $e->getMessage());
@@ -167,9 +165,9 @@ final class AcuityClientTest extends TestCase
     {
         $previous = ini_set('zend.exception_ignore_args', '0');
         try {
-            $this->transport->push(200, 'not json ' . self::KEY);
+            $this->transport->push(200, '[not json ' . self::KEY);
             try {
-                $this->client()->get('/calendars');
+                $this->client()->getList('/calendars');
                 self::fail('Expected exception');
             } catch (RuntimeException $e) {
                 foreach ($e->getTrace() as $frame) {
@@ -189,6 +187,8 @@ final class AcuityClientTest extends TestCase
         yield 'empty object' => ['{}'];
         yield 'object with numeric key' => ['{"0":{"id":7}}'];
         yield 'object' => ['{"a":1}'];
+        yield 'scalar' => ['"text"'];
+        yield 'html' => ['<html>maintenance</html>'];
     }
 
     #[\PHPUnit\Framework\Attributes\DataProvider('nonListBodies')]
@@ -216,7 +216,7 @@ final class AcuityClientTest extends TestCase
         }
 
         try {
-            $this->client()->get('/calendars');
+            $this->client()->getList('/calendars');
             self::fail('Expected exception');
         } catch (RuntimeException $e) {
             self::assertStringContainsString('HTTP 503 after 3 retries', $e->getMessage());
@@ -230,7 +230,7 @@ final class AcuityClientTest extends TestCase
         $this->transport->push(400, ['status_code' => 400, 'error' => 'invalid_appointment_type', 'message' => 'Appointment type ID is invalid']);
 
         try {
-            $this->client()->get('/availability/dates', ['appointmentTypeID' => 1]);
+            $this->client()->getList('/availability/dates', ['appointmentTypeID' => 1]);
             self::fail('Expected exception');
         } catch (RuntimeException $e) {
             self::assertSame('GET /availability/dates failed: HTTP 400', $e->getMessage());
@@ -243,7 +243,7 @@ final class AcuityClientTest extends TestCase
         $this->transport->push(400, ['error' => 'a1b2c3d4e5f60718293a4b5c6d7e8f90']);
 
         try {
-            $this->client()->get('/calendars');
+            $this->client()->getList('/calendars');
             self::fail('Expected exception');
         } catch (RuntimeException $e) {
             self::assertSame('GET /calendars failed: HTTP 400', $e->getMessage());
@@ -255,7 +255,7 @@ final class AcuityClientTest extends TestCase
         $this->transport->push(401, ['message' => 'Unauthorized ' . self::KEY]);
 
         try {
-            $this->client()->get('/calendars');
+            $this->client()->getList('/calendars');
             self::fail('Expected exception');
         } catch (RuntimeException $e) {
             self::assertStringContainsString('HTTP 401', $e->getMessage());
@@ -266,20 +266,11 @@ final class AcuityClientTest extends TestCase
 
     public function testInvalidJsonFails(): void
     {
-        $this->transport->push(200, '<html>maintenance</html>');
+        $this->transport->push(200, '[<html>maintenance</html>');
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('not valid JSON');
 
-        $this->client()->get('/calendars');
-    }
-
-    public function testScalarJsonFails(): void
-    {
-        $this->transport->push(200, '"text"');
-
-        $this->expectException(RuntimeException::class);
-
-        $this->client()->get('/calendars');
+        $this->client()->getList('/calendars');
     }
 }

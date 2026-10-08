@@ -15,7 +15,6 @@ final class Day
 {
     /** @param list<Slot> $slots ordered by start, then end */
     public function __construct(
-        public readonly string $date,
         public readonly bool $hoursUnknown,
         public readonly ?string $storedAt,
         public readonly array $slots,

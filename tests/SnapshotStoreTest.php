@@ -12,6 +12,8 @@ use RuntimeException;
 
 final class SnapshotStoreTest extends TestCase
 {
+    use RemovesTempDirs;
+
     private string $root;
     private string $data;
     private string $main;
@@ -29,20 +31,6 @@ final class SnapshotStoreTest extends TestCase
     protected function tearDown(): void
     {
         $this->remove($this->root);
-    }
-
-    private function remove(string $path): void
-    {
-        if (is_dir($path)) {
-            foreach (scandir($path) ?: [] as $name) {
-                if ($name !== '.' && $name !== '..') {
-                    $this->remove($path . '/' . $name);
-                }
-            }
-            rmdir($path);
-        } elseif (file_exists($path)) {
-            unlink($path);
-        }
     }
 
     private static function store(array $hours = ['21:30-22:00', '22:00-22:30']): array

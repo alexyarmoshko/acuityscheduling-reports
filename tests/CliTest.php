@@ -10,6 +10,8 @@ use PHPUnit\Framework\TestCase;
 /** Runs acuity-report.php as a separate process. */
 final class CliTest extends TestCase
 {
+    use RemovesTempDirs;
+
     /** @return array{int, string, string} exit code, stdout, stderr */
     private static function runScript(string ...$args): array
     {
@@ -87,20 +89,6 @@ final class CliTest extends TestCase
             self::assertFileDoesNotExist($dir . '/.env');
         } finally {
             $this->remove($dir);
-        }
-    }
-
-    private function remove(string $path): void
-    {
-        if (is_dir($path)) {
-            foreach (scandir($path) ?: [] as $name) {
-                if ($name !== '.' && $name !== '..') {
-                    $this->remove($path . '/' . $name);
-                }
-            }
-            rmdir($path);
-        } elseif (file_exists($path)) {
-            unlink($path);
         }
     }
 

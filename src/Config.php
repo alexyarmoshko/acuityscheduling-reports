@@ -105,6 +105,18 @@ final class Config
         );
     }
 
+    /**
+     * Whether a calendar is shown: an empty include list means all, and
+     * exclusion wins. Withdrawal is a separate rule (SeasonAvailability).
+     *
+     * @param list<int> $include
+     * @param list<int> $exclude
+     */
+    public static function selects(int $id, array $include, array $exclude): bool
+    {
+        return ($include === [] || in_array($id, $include, true)) && !in_array($id, $exclude, true);
+    }
+
     /** @param array<mixed> $values */
     private static function month(array $values, string $key): string
     {

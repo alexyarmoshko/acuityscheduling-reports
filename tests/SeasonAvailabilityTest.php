@@ -672,9 +672,9 @@ final class SeasonAvailabilityTest extends TestCase
     {
         $this->types[] = ['id' => 45, 'name' => 'Class', 'duration' => 60, 'active' => true, 'type' => 'class', 'calendarIDs' => [7]];
 
-        [$report] = $this->build(settings: ['appointment_type_ids' => [42, 44, 45]]);
+        [$report, $store] = $this->build(settings: ['appointment_type_ids' => [42, 44, 45]]);
 
-        self::assertSame([42], array_column($report->types, 'id'));
+        self::assertSame([42], array_column($store['lastRun']['types'], 'id'));
         $warnings = implode("\n", $report->warnings);
         self::assertStringContainsString('44 left out: not found', $warnings);
         self::assertStringContainsString('45 left out: not of type service', $warnings);

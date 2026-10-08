@@ -22,6 +22,7 @@ require_once __DIR__ . '/src/Tutor.php';
 require_once __DIR__ . '/src/Slot.php';
 require_once __DIR__ . '/src/Day.php';
 require_once __DIR__ . '/src/TutorSeason.php';
+require_once __DIR__ . '/src/Season.php';
 require_once __DIR__ . '/src/Report.php';
 require_once __DIR__ . '/src/SnapshotStore.php';
 require_once __DIR__ . '/src/SeasonAvailability.php';

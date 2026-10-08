@@ -226,10 +226,11 @@ final class SnapshotStore
             throw $e;
         }
 
-        if (!@rename($reportTemp, $reportPath)) {
-            @unlink($reportTemp);
+        try {
+            self::installReport($reportTemp, $reportPath);
+        } catch (RuntimeException $e) {
             @unlink($storeTemp);
-            throw new RuntimeException("Cannot write the report to {$reportPath}. Nothing was changed.");
+            throw $e;
         }
 
         $main = $dir . '/' . self::FILE;
@@ -253,7 +254,12 @@ final class SnapshotStore
     public static function publishReport(string $reportPath, string $report, string $dir): void
     {
         self::prepareReportDir($reportPath, $dir);
-        $temp = self::writeTemp(dirname($reportPath), basename($reportPath), $report);
+        self::installReport(self::writeTemp(dirname($reportPath), basename($reportPath), $report), $reportPath);
+    }
+
+    /** Renames a prepared report temp file into place; on failure removes it. */
+    private static function installReport(string $temp, string $reportPath): void
+    {
         if (!@rename($temp, $reportPath)) {
             @unlink($temp);
             throw new RuntimeException("Cannot write the report to {$reportPath}. Nothing was changed.");

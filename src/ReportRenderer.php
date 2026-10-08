@@ -73,19 +73,13 @@ final class ReportRenderer
      */
     private static function data(array $store, array $run, DateTimeImmutable $generated, DateTimeZone $tz, array $include, array $exclude): array
     {
-        $months = [];
-        $dates = [];
-        $end = (new DateTimeImmutable($run['seasonEnd'] . '-01', $tz))->modify('first day of next month');
-        for ($month = new DateTimeImmutable($run['seasonStart'] . '-01', $tz); $month < $end; $month = $month->modify('first day of next month')) {
-            $months[] = $month->format('Y-m');
-        }
-        for ($day = new DateTimeImmutable($run['seasonStart'] . '-01', $tz); $day < $end; $day = $day->modify('+1 day')) {
-            $dates[] = $day->format('Y-m-d');
-        }
+        // The saved season, not config.php's: the page shows what the run saw.
+        $season = new Season($run['seasonStart'], $run['seasonEnd'], $tz);
+        $dates = $season->dates();
 
         $tutors = [];
         foreach ($store['calendars'] as $id => $calendar) {
-            if (($include !== [] && !in_array($id, $include, true)) || in_array($id, $exclude, true)) {
+            if (!Config::selects($id, $include, $exclude)) {
                 continue;
             }
             $days = [];
@@ -125,7 +119,7 @@ final class ReportRenderer
         usort($tutors, static fn (array $a, array $b): int => strnatcasecmp($a['name'], $b['name']));
 
         return [
-            'months' => $months,
+            'months' => $season->months(),
             'today' => $generated->format('Y-m-d'),
             'tutors' => $tutors,
         ];

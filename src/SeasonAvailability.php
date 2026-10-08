@@ -29,6 +29,7 @@ final class SeasonAvailability
     private const MAX_APPOINTMENTS = 100;
 
     private readonly DateTimeZone $tz;
+    private readonly Season $season;
     private readonly DateTimeImmutable $runStart;
     private readonly int $bookableFrom;
     private readonly int $bookableUntil;
@@ -46,6 +47,7 @@ final class SeasonAvailability
             throw new RuntimeException('appointment_type_ids is empty in config.php: run --list to find the IDs');
         }
         $this->tz = new DateTimeZone(self::TIMEZONE);
+        $this->season = new Season($config->seasonStart, $config->seasonEnd, $this->tz);
         $this->runStart = $runStart->setTimezone($this->tz);
         // The margins keep the window valid for every request of the run
         // (plan: "Observation window and whole dates").
@@ -79,7 +81,7 @@ final class SeasonAvailability
         }
         $reported = [];
         foreach ($tutorTypes as $id => $typeIds) {
-            if (($include === [] || in_array($id, $include, true)) && !in_array($id, $this->config->excludeCalendars, true)) {
+            if (Config::selects($id, $include, $this->config->excludeCalendars)) {
                 $reported[$id] = $typeIds;
             }
         }
@@ -107,10 +109,10 @@ final class SeasonAvailability
         }
 
         $dates = [];
-        foreach ($this->seasonDates() as $date) {
+        foreach ($this->season->dates() as $date) {
             $dates[$date] = $this->fullyObservable($date);
         }
-        if ($this->seasonEnd()->getTimestamp() > $this->bookableUntil) {
+        if ($this->season->end()->getTimestamp() > $this->bookableUntil) {
             $this->warnings[] = 'The season ends after the booking horizon (' . $this->local($this->bookableUntil)->format('Y-m-d H:i')
                 . '): later days show what earlier runs saw, or are marked hours unknown';
         }
@@ -136,7 +138,7 @@ final class SeasonAvailability
             }
             $calendarTypes = array_map(static fn (int $t): array => self::typeSummary($types[$t]), $typeIds);
             $store['calendars'][$id] = ['name' => $tutor->name, 'reportedAt' => $observedAt, 'types' => $calendarTypes, 'days' => $entries];
-            $seasons[] = new TutorSeason($tutor, $days, $calendarTypes);
+            $seasons[] = new TutorSeason($tutor, $days);
         }
 
         $typeList = array_values(array_map(self::typeSummary(...), $types));
@@ -153,11 +155,7 @@ final class SeasonAvailability
         }
 
         $report = new Report(
-            $this->config->seasonStart,
-            $this->config->seasonEnd,
-            $this->runStart,
             self::TIMEZONE,
-            $typeList,
             $this->local($this->bookableFrom),
             $this->local($this->bookableUntil),
             $seasons,
@@ -266,7 +264,7 @@ final class SeasonAvailability
         foreach ($typeIds as $typeId) {
             $seconds = $types[$typeId]['duration'] * 60;
             $query = ['appointmentTypeID' => $typeId, 'calendarID' => $calendarId, 'timezone' => self::TIMEZONE];
-            foreach ($this->seasonMonths() as $month) {
+            foreach ($this->season->months() as $month) {
                 if ($month < $currentMonth) {
                     continue; // past months have no free slots
                 }
@@ -291,7 +289,7 @@ final class SeasonAvailability
     private function bookings(int $calendarId): array
     {
         $bookings = [];
-        foreach ($this->seasonMonths() as $month) {
+        foreach ($this->season->months() as $month) {
             $first = new DateTimeImmutable($month . '-01', $this->tz);
             $rows = $this->client->getList('/appointments', [
                 'calendarID' => $calendarId,
@@ -390,7 +388,7 @@ final class SeasonAvailability
         $write = $fullyObservable || $hours !== [] || $entry !== null;
         $newEntry = $write ? ['observedAt' => $observedAt, 'hours' => $hours, 'complete' => $complete] : null;
 
-        return [new Day($date, !$complete, $usedStored ? $entry['observedAt'] : null, $shown), $newEntry];
+        return [new Day(!$complete, $usedStored ? $entry['observedAt'] : null, $shown), $newEntry];
     }
 
     /** The whole local date, 00:00 to the next 00:00, lies inside the observation window. */
@@ -424,41 +422,6 @@ final class SeasonAvailability
     private function local(int $timestamp): DateTimeImmutable
     {
         return (new DateTimeImmutable('@' . $timestamp))->setTimezone($this->tz);
-    }
-
-    /** @return list<string> every local date of the season, YYYY-MM-DD */
-    private function seasonDates(): array
-    {
-        $dates = [];
-        $end = $this->seasonEnd();
-        for ($day = $this->seasonStart(); $day < $end; $day = $day->modify('+1 day')) {
-            $dates[] = $day->format('Y-m-d');
-        }
-
-        return $dates;
-    }
-
-    /** @return list<string> YYYY-MM */
-    private function seasonMonths(): array
-    {
-        $months = [];
-        $end = $this->seasonEnd();
-        for ($month = $this->seasonStart(); $month < $end; $month = $month->modify('first day of next month')) {
-            $months[] = $month->format('Y-m');
-        }
-
-        return $months;
-    }
-
-    private function seasonStart(): DateTimeImmutable
-    {
-        return new DateTimeImmutable($this->config->seasonStart . '-01 00:00', $this->tz);
-    }
-
-    /** The first instant after the season. */
-    private function seasonEnd(): DateTimeImmutable
-    {
-        return (new DateTimeImmutable($this->config->seasonEnd . '-01 00:00', $this->tz))->modify('first day of next month');
     }
 
     private static function instant(mixed $value, string $path, string $field): int

@@ -19,6 +19,8 @@ use RuntimeException;
 
 final class ReportRendererTest extends TestCase
 {
+    use RemovesTempDirs;
+
     private const GENERATED = '2026-10-08T14:32:07+01:00';
 
     private string $root;
@@ -31,20 +33,6 @@ final class ReportRendererTest extends TestCase
     protected function tearDown(): void
     {
         $this->remove($this->root);
-    }
-
-    private function remove(string $path): void
-    {
-        if (is_dir($path)) {
-            foreach (scandir($path) ?: [] as $name) {
-                if ($name !== '.' && $name !== '..') {
-                    $this->remove($path . '/' . $name);
-                }
-            }
-            rmdir($path);
-        } elseif (file_exists($path)) {
-            unlink($path);
-        }
     }
 
     private static function at(string $time): DateTimeImmutable
