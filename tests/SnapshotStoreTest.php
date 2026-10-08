@@ -190,11 +190,13 @@ final class SnapshotStoreTest extends TestCase
         self::assertSame($store, SnapshotStore::load($this->data));
     }
 
-    public function testTouchingIntervalsAreValid(): void
+    public function testTouchingAndOverlappingIntervalsAreValid(): void
     {
         SnapshotStore::validate(self::store(['21:30-22:00', '22:00-22:30']));
+        // Slots of different durations are kept apart, not merged.
+        SnapshotStore::validate(self::store(['21:30-22:00', '21:30-22:30', '22:00-22:30']));
 
-        $this->addToAssertionCount(1);
+        $this->addToAssertionCount(2);
     }
 
     /** @return iterable<string, array{string}> */
@@ -212,8 +214,9 @@ final class SnapshotStoreTest extends TestCase
         yield 'bad observedAt' => [$wrap('"2026-11-02": {"observedAt": "yesterday", "hours": []}')];
         yield 'bad interval' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00", "hours": ["21:30-24:00"]}')];
         yield 'reversed interval' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00", "hours": ["22:00-21:30"]}')];
-        yield 'overlapping intervals' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00", "hours": ["21:30-22:15", "22:00-22:30"]}')];
-        yield 'unordered intervals' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00", "hours": ["22:00-22:30", "21:30-22:00"]}')];
+        yield 'duplicate intervals' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00", "hours": ["21:30-22:00", "21:30-22:00"]}')];
+        yield 'unordered starts' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00", "hours": ["22:00-22:30", "21:30-22:00"]}')];
+        yield 'unordered ends' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00", "hours": ["21:30-22:30", "21:30-22:00"]}')];
         yield 'missing hours' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00"}')];
     }
 

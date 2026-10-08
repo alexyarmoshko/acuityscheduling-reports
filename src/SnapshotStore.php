@@ -14,8 +14,10 @@ use RuntimeException;
  *
  * Shape: {"version": 1, "calendars": {"<id>": {"name": "...", "days":
  * {"YYYY-MM-DD": {"observedAt": "<ISO 8601>", "hours": ["HH:MM-HH:MM", ...]}}}}}.
- * `hours` are sorted local intervals with no overlap; touching ones are kept
- * apart, and `[]` records that no hours were seen.
+ * Each entry describes a whole date. `hours` holds one local interval per slot
+ * seen (free or booked), sorted by start then end, without duplicates and
+ * never merged, so overlapping slots of different durations stay apart. `[]`
+ * records that no hours were seen.
  */
 final class SnapshotStore
 {
@@ -114,7 +116,7 @@ final class SnapshotStore
                 if (!is_array($entry['hours']) || !array_is_list($entry['hours'])) {
                     throw new RuntimeException("{$where}: hours must be a list");
                 }
-                $previousEnd = '';
+                $previous = '';
                 foreach ($entry['hours'] as $hours) {
                     if (!is_string($hours) || preg_match(self::HOURS, $hours) !== 1) {
                         throw new RuntimeException("{$where}: an interval is not HH:MM-HH:MM");
@@ -123,10 +125,11 @@ final class SnapshotStore
                     if ($start >= $end) {
                         throw new RuntimeException("{$where}: an interval does not end after it starts");
                     }
-                    if ($start < $previousEnd) {
-                        throw new RuntimeException("{$where}: intervals overlap or are out of order");
+                    // Fixed-width HH:MM-HH:MM strings sort by start, then end.
+                    if ($hours <= $previous) {
+                        throw new RuntimeException("{$where}: intervals are duplicated or out of order");
                     }
-                    $previousEnd = $end;
+                    $previous = $hours;
                 }
             }
         }

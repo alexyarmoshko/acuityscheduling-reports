@@ -20,7 +20,6 @@ final class ConfigTest extends TestCase
             'appointment_type_ids' => [42, 43],
             'min_notice_hours' => 18,
             'max_days_ahead' => 287,
-            'session_window' => ['21:30', '22:30'],
             'exclude_calendars' => [7],
         ];
     }
@@ -34,8 +33,6 @@ final class ConfigTest extends TestCase
         self::assertSame([42, 43], $config->appointmentTypeIds);
         self::assertSame(18, $config->minNoticeHours);
         self::assertSame(287, $config->maxDaysAhead);
-        self::assertSame('21:30', $config->sessionStart);
-        self::assertSame('22:30', $config->sessionEnd);
         self::assertSame([7], $config->excludeCalendars);
     }
 
@@ -76,7 +73,6 @@ final class ConfigTest extends TestCase
     {
         yield 'month format' => ['season_start', '2026-1'];
         yield 'month trailing newline' => ['season_start', "2026-11\n"];
-        yield 'time trailing newline' => ['session_window', ["21:30\n", '22:30']];
         yield 'month 13' => ['season_end', '2027-13'];
         yield 'start after end' => ['season_start', '2027-04'];
         yield 'type ids scalar' => ['appointment_type_ids', 42];
@@ -85,9 +81,6 @@ final class ConfigTest extends TestCase
         yield 'type ids not list' => ['appointment_type_ids', ['a' => 42]];
         yield 'negative notice' => ['min_notice_hours', -1];
         yield 'zero days ahead' => ['max_days_ahead', 0];
-        yield 'window bad time' => ['session_window', ['21:30', '24:00']];
-        yield 'window reversed' => ['session_window', ['22:30', '21:30']];
-        yield 'window one value' => ['session_window', ['21:30']];
         yield 'exclude not list' => ['exclude_calendars', ['a' => 1]];
         yield 'exclude string id' => ['exclude_calendars', ['7']];
     }
@@ -120,6 +113,17 @@ final class ConfigTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('exclude_calendar');
+
+        Config::fromArray($values);
+    }
+
+    public function testRemovedSessionWindowIsNamedAsUnknown(): void
+    {
+        $values = self::valid();
+        $values['session_window'] = ['21:30', '22:30'];
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Unknown setting(s): session_window');
 
         Config::fromArray($values);
     }

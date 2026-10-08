@@ -39,14 +39,12 @@ final class DebugTutorCommand
             $parts = [];
             foreach ($day->slots as $slot) {
                 foreach ($slot->starts as $time => $source) {
-                    $parts[] = "{$time} {$slot->status} " . ($source === Slot::STORED ? "stored {$day->asOf}" : 'live');
+                    $parts[] = "{$time} {$slot->status} " . ($source === Slot::STORED ? "stored {$day->storedAt}" : 'live');
                 }
             }
             $line = $date . ' ' . (new DateTimeImmutable($date))->format('D') . '  ' . ($parts === [] ? '-' : implode(', ', $parts));
             if ($day->hoursUnknown) {
                 $line .= '  [hours unknown]';
-            } elseif ($day->asOf !== null) {
-                $line .= "  [uses saved hours as of {$day->asOf}]";
             }
             $out .= $line . "\n";
         }

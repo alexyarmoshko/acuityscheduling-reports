@@ -63,17 +63,25 @@ them from two sources:
 
 Free slots exist only inside the booking window (after the minimum notice and
 before the maximum booking horizon set in `config.php`). So each report run
-saves, for every day it could see in full, that day's hours (free plus booked)
-to `data/availability-cache.json`. Later runs use these saved hours for the
-parts of a day the API no longer shows, such as past days.
+saves, for every day that lies wholly inside that window, that day's hours
+(free plus booked) to `data/availability-cache.json`. Later runs fill in the
+hours the API no longer shows, such as past days, from these saved hours.
+Anything the current run reads from the API takes priority.
 
 As a result:
 
-- A day that relies on saved hours is marked **uses saved hours as of** the run
-  that saved them. Its bookings always come from the current run.
-- A day that could not be read in full, and that no earlier run saw, is marked
-  **hours unknown**. Its bookings and any free slots are shown, but further
-  hours may be missing.
+- A past day shows the hours of the last run that saw it in full. Its bookings
+  always come from the current run, so a cancelled session shows as free.
+- A day that could not be read in full, and that no earlier run saw in full, is
+  marked **hours unknown**. Its bookings and any free slots are shown, but
+  further hours may be missing.
+
+**Make the first run before the season starts:** at least the minimum notice
+plus one hour before the season's first day begins (with 18 hours' notice, by
+05:00 the day before). That run saves every season day in full, provided the
+season also ends at least one day inside the maximum booking horizon (the
+script warns when it does not). Regular runs after that keep the saved hours
+current.
 - Blocked-off time, and slots hidden by Acuity settings such as resources or
   scheduling limits, do not appear.
 

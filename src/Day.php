@@ -7,9 +7,9 @@ namespace AcuityReport;
 /**
  * One calendar's slots on one local date.
  *
- * At most one flag applies: $hoursUnknown when part of the session window
- * could not be read and no snapshot covers it; $asOf (the snapshot's
- * observedAt) when stored hours decide that part.
+ * $hoursUnknown: this run could not see the whole date and no snapshot entry
+ * exists. $storedAt: the snapshot's observedAt when a stored slot is shown
+ * (for --debug-tutor; the report page does not show it).
  */
 final class Day
 {
@@ -17,7 +17,7 @@ final class Day
     public function __construct(
         public readonly string $date,
         public readonly bool $hoursUnknown,
-        public readonly ?string $asOf,
+        public readonly ?string $storedAt,
         public readonly array $slots,
     ) {
     }

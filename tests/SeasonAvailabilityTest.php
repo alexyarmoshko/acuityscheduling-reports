@@ -19,13 +19,18 @@ use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
 /**
- * Retrieval and rebuild against a fake API. Unless a test says otherwise the
- * season is 2026-11..2027-03, the session window 21:30-22:30, and the run
- * starts on Sunday 2026-11-01 16:00, so Monday 2 November is fully observable.
+ * Retrieval and rebuild against a fake API (plan revision 7). Unless a test
+ * says otherwise the season is 2026-11..2027-03, notice is 18 hours, and the
+ * run starts on Saturday 2026-10-31 16:00. So bookableFrom is Sunday 1 Nov
+ * 11:00: Sunday is the cutoff day, and Monday 2 Nov is fully observable.
  */
 final class SeasonAvailabilityTest extends TestCase
 {
-    private const SUNDAY_1600 = '2026-11-01 16:00';
+    private const SATURDAY_1600 = '2026-10-31 16:00';
+    private const OBSERVED = '2026-10-31T16:00:00+00:00';
+    // A run on Monday 2 Nov at 02:45 has bookableFrom 21:45 that day: the
+    // 21:30 slot cannot be observed, the 22:00 slot can.
+    private const MONDAY_0245 = '2026-11-02 02:45';
     private const AS_OF = '2026-10-05T12:00:00+01:00';
 
     private FakeTransport $transport;
@@ -72,8 +77,13 @@ final class SeasonAvailabilityTest extends TestCase
         ];
     }
 
+    private function addType(int $id, int $duration): void
+    {
+        $this->types[] = ['id' => $id, 'name' => "Type {$id}", 'duration' => $duration, 'active' => true, 'type' => 'service', 'calendarIDs' => [7]];
+    }
+
     /** @return array{Report, array} */
-    private function build(string $runStart = self::SUNDAY_1600, ?array $store = null, array $settings = []): array
+    private function build(string $runStart = self::SATURDAY_1600, ?array $store = null, array $settings = []): array
     {
         return $this->availability($runStart, $settings)->build($store ?? SnapshotStore::empty());
     }
@@ -86,7 +96,6 @@ final class SeasonAvailabilityTest extends TestCase
             'appointment_type_ids' => [42],
             'min_notice_hours' => 18,
             'max_days_ahead' => 287,
-            'session_window' => ['21:30', '22:30'],
         ]);
         $client = new AcuityClient(new Credentials('1', 'k'), $this->transport, static fn (): float => 0.0, static function (float $s): void {
         });
@@ -123,83 +132,28 @@ final class SeasonAvailabilityTest extends TestCase
 
     // --- Snapshot rules ---
 
-    public function testFullyObservableDateIsStoredAsFreeUnionBookedAndNotFlagged(): void
+    public function testFullyObservableDateReplacesOrCreatesItsEntry(): void
     {
+        $store = self::store([
+            '2026-11-02' => self::entry(self::AS_OF, '20:00-20:30'),
+            '2026-11-09' => self::entry(self::AS_OF, '22:00-22:30'),
+        ]);
         $this->free('2026-11-02T21:30:00+0000');
         $this->book('2026-11-02T22:00:00+0000');
 
-        [$report, $store] = $this->build();
+        [$report, $after] = $this->build(store: $store);
 
         $day = self::day($report, '2026-11-02');
         self::assertSame(['21:30-22:00 free 21:30 live', '22:00-22:30 booked 22:00 live'], self::slots($day));
         self::assertFalse($day->hoursUnknown);
-        self::assertNull($day->asOf);
+        self::assertNull($day->storedAt);
         self::assertSame('Lesson', $day->slots[1]->typeName);
-        self::assertSame(
-            self::entry('2026-11-01T16:00:00+00:00', '21:30-22:00', '22:00-22:30'),
-            $store['calendars'][7]['days']['2026-11-02'],
-        );
+        $days = $after['calendars'][7]['days'];
+        self::assertSame(self::entry(self::OBSERVED, '21:30-22:00', '22:00-22:30'), $days['2026-11-02']);
         // Nothing seen on a fully observable date is a real observation.
-        self::assertSame(self::entry('2026-11-01T16:00:00+00:00'), $store['calendars'][7]['days']['2026-11-03']);
-        self::assertSame('Tutor A', $store['calendars'][7]['name']);
-    }
-
-    public function testFullyObservableDateReplacesAnExistingEntry(): void
-    {
-        $store = self::store([
-            '2026-11-02' => self::entry(self::AS_OF, '21:30-22:00'),
-            '2026-11-09' => self::entry(self::AS_OF, '22:00-22:30'),
-        ]);
-        $this->free('2026-11-09T21:30:00+0000');
-
-        [, $after] = $this->build(store: $store);
-
-        self::assertSame(self::entry('2026-11-01T16:00:00+00:00'), $after['calendars'][7]['days']['2026-11-02']);
-        self::assertSame(self::entry('2026-11-01T16:00:00+00:00', '21:30-22:00'), $after['calendars'][7]['days']['2026-11-09']);
-    }
-
-    public function testOverlappingSlotsAreMergedInTheStore(): void
-    {
-        $this->types[] = ['id' => 43, 'name' => 'Long', 'duration' => 60, 'active' => true, 'type' => 'service', 'calendarIDs' => [7]];
-        $this->free('2026-11-02T21:30:00+0000', 42);
-        $this->free('2026-11-02T21:30:00+0000', 43);
-
-        [, $store] = $this->build(settings: ['appointment_type_ids' => [42, 43]]);
-
-        self::assertSame(['21:30-22:30'], $store['calendars'][7]['days']['2026-11-02']['hours']);
-    }
-
-    public function testSlotCrossingMidnightIsLeftOutOfTheEntryOnly(): void
-    {
-        $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00', '22:00-22:30')]);
-        $this->free('2026-11-02T22:00:00+0000');
-        $this->book('2026-11-02T23:45:00+0000');
-
-        [$report, $after] = $this->build(store: $store);
-
-        // The entry is still replaced: the stale 21:30 hour does not survive.
-        self::assertSame(self::entry('2026-11-01T16:00:00+00:00', '22:00-22:30'), $after['calendars'][7]['days']['2026-11-02']);
-        self::assertStringContainsString('2026-11-02: a slot crosses midnight', implode("\n", $report->warnings));
-        self::assertSame(['22:00-22:30 free 22:00 live', '23:45-00:15 booked 23:45 live'], self::slots(self::day($report, '2026-11-02')));
-    }
-
-    public function testSlotCrossingMidnightOnItsOwnShowsTheBooking(): void
-    {
-        $this->book('2026-11-02T23:45:00+0000');
-
-        [$report] = $this->build();
-
-        self::assertSame(['23:45-00:15 booked 23:45 live'], self::slots(self::day($report, '2026-11-02')));
-    }
-
-    public function testImpossibleDateInTheApiIsRejected(): void
-    {
-        $this->times[42]['2026-11-02'] = ['2026-11-31T21:30:00+0000'];
-
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage("'time' is not a valid time");
-
-        $this->build();
+        self::assertSame(self::entry(self::OBSERVED), $days['2026-11-09']);
+        self::assertSame(self::entry(self::OBSERVED), $days['2026-11-03']);
+        self::assertSame('Tutor A', $after['calendars'][7]['name']);
     }
 
     public function testBookedHoursAreKeptAndShowFreeAfterCancellation(): void
@@ -215,94 +169,64 @@ final class SeasonAvailabilityTest extends TestCase
 
         $day = self::day($report, '2026-11-02');
         self::assertSame(['21:30-22:30 free 21:30 stored, 22:00 stored'], self::slots($day));
-        self::assertSame('2026-11-01T16:00:00+00:00', $day->asOf);
+        self::assertSame(self::OBSERVED, $day->storedAt);
         self::assertFalse($day->hoursUnknown);
         self::assertSame($store['calendars'][7]['days']['2026-11-02'], $after['calendars'][7]['days']['2026-11-02']);
     }
 
-    public function testNoticeWindowDateCoveredByLiveDataHasNoAsOf(): void
+    public function testCutoffDayShowsOnlyStoredHoursThisRunCannotObserve(): void
     {
-        $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00')]);
-        $this->free('2026-11-02T21:30:00+0000');
-        $this->book('2026-11-02T22:00:00+0000');
-
-        [$report, $after] = $this->build('2026-11-02 12:00', $store);
-
-        $day = self::day($report, '2026-11-02');
-        self::assertNull($day->asOf);
-        self::assertFalse($day->hoursUnknown);
-        self::assertSame(['21:30-22:00 free 21:30 live', '22:00-22:30 booked 22:00 live'], self::slots($day));
-        self::assertSame(self::entry(self::AS_OF, '21:30-22:00'), $after['calendars'][7]['days']['2026-11-02']);
-    }
-
-    public function testStoredEmptyDecidesTheUnobservablePart(): void
-    {
-        // Cutoff 21:45: 21:30 cannot be observed, 22:00 can.
-        $store = self::store(['2026-11-02' => self::entry(self::AS_OF)]);
-        $this->free('2026-11-02T22:00:00+0000');
-
-        [$report] = $this->build('2026-11-02 02:45', $store);
-
-        $day = self::day($report, '2026-11-02');
-        self::assertSame(self::AS_OF, $day->asOf);
-        self::assertFalse($day->hoursUnknown);
-        self::assertSame(['22:00-22:30 free 22:00 live'], self::slots($day));
-    }
-
-    public function testEmptyObservedDateIsNotFlaggedByALaterRun(): void
-    {
-        [, $store] = $this->build();
-        self::assertSame([], $store['calendars'][7]['days']['2026-11-02']['hours']);
-
-        [$report] = $this->build('2026-11-10 12:00', $store);
-
-        $day = self::day($report, '2026-11-02');
-        self::assertFalse($day->hoursUnknown);
-        self::assertSame('2026-11-01T16:00:00+00:00', $day->asOf);
-        self::assertSame([], $day->slots);
-    }
-
-    public function testPartlyObservableDayFillsOnlyTheUnresolvedPartFromTheStore(): void
-    {
+        // 22:00 is observable at a 21:45 cutoff and the API no longer returns
+        // it, so its stored hour is not shown.
         $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00', '22:00-22:30')]);
-        $this->free('2026-11-02T22:00:00+0000');
 
-        [$report, $after] = $this->build('2026-11-02 02:45', $store);
+        [$report, $after] = $this->build(self::MONDAY_0245, $store);
 
         $day = self::day($report, '2026-11-02');
-        self::assertSame(['21:30-22:30 free 21:30 stored, 22:00 live'], self::slots($day));
-        self::assertSame(self::AS_OF, $day->asOf);
+        self::assertSame(['21:30-22:00 free 21:30 stored'], self::slots($day));
+        self::assertSame(self::AS_OF, $day->storedAt);
+        self::assertFalse($day->hoursUnknown);
         self::assertSame($store['calendars'][7]['days']['2026-11-02'], $after['calendars'][7]['days']['2026-11-02']);
     }
 
-    public function testLiveSlotInsideTheMarginIsShownLiveAndNeedsNoStore(): void
+    public function testStoredSlotStraddlingTheCutoffIsShown(): void
+    {
+        // Observability is per whole slot: 21:30-22:30 starts before the 21:45
+        // cutoff, so it is not observable even though most of it is.
+        $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:30')]);
+
+        [$report] = $this->build(self::MONDAY_0245, $store);
+
+        self::assertSame(['21:30-22:30 free 21:30 stored'], self::slots(self::day($report, '2026-11-02')));
+    }
+
+    public function testLiveSlotReplacesTheStoredIntervalItOverlaps(): void
     {
         $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00', '22:00-22:30')]);
-        $this->free('2026-11-02T21:30:00+0000');
+        $this->free('2026-11-02T21:30:00+0000'); // still returned inside the margin
         $this->free('2026-11-02T22:00:00+0000');
 
-        [$report, $after] = $this->build('2026-11-02 02:45', $store);
+        [$report] = $this->build(self::MONDAY_0245, $store);
 
         $day = self::day($report, '2026-11-02');
         self::assertSame(['21:30-22:30 free 21:30 live, 22:00 live'], self::slots($day));
-        self::assertNull($day->asOf);
-        self::assertFalse($day->hoursUnknown);
-        // Still only partly observable, so the entry is not replaced.
-        self::assertSame($store['calendars'][7]['days']['2026-11-02'], $after['calendars'][7]['days']['2026-11-02']);
+        self::assertNull($day->storedAt);
     }
 
-    public function testUnobservableDayWithoutEntryIsHoursUnknownAndNotStored(): void
+    public function testLiveSlotDroppedForABookingDoesNotHideAStoredSession(): void
     {
+        $this->types[0]['duration'] = 60;
+        $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00')]);
+        $this->free('2026-11-02T21:30:00+0000'); // 21:30-22:30, overlaps the booking
         $this->book('2026-11-02T22:00:00+0000');
 
-        [$report, $store] = $this->build('2026-11-02 12:00');
+        [$report] = $this->build(self::MONDAY_0245, $store);
 
-        $day = self::day($report, '2026-11-02');
-        self::assertTrue($day->hoursUnknown);
-        self::assertNull($day->asOf);
-        self::assertSame(['22:00-22:30 booked 22:00 live'], self::slots($day));
-        self::assertArrayNotHasKey('2026-11-02', $store['calendars'][7]['days']);
-        self::assertArrayHasKey('2026-11-03', $store['calendars'][7]['days']);
+        self::assertSame(
+            ['21:30-22:00 free 21:30 stored', '22:00-22:30 booked 22:00 live'],
+            self::slots(self::day($report, '2026-11-02')),
+        );
+        self::assertCount(1, $report->warnings);
     }
 
     public function testStoredHourNowBookedShowsOnlyTheBookingWithoutWarning(): void
@@ -336,6 +260,111 @@ final class SeasonAvailabilityTest extends TestCase
         self::assertStringContainsString('2026-11-02 21:30', $report->warnings[0]);
     }
 
+    public function testDateNotSeenWholeWithoutEntryIsHoursUnknownAndNotStored(): void
+    {
+        $this->book('2026-11-02T22:00:00+0000');
+
+        [$report, $store] = $this->build('2026-11-02 12:00');
+
+        $day = self::day($report, '2026-11-02');
+        self::assertTrue($day->hoursUnknown);
+        self::assertSame(['22:00-22:30 booked 22:00 live'], self::slots($day));
+        self::assertArrayNotHasKey('2026-11-02', $store['calendars'][7]['days']);
+        // bookableFrom is Tuesday 07:00, so Wednesday is the first whole date.
+        self::assertArrayNotHasKey('2026-11-03', $store['calendars'][7]['days']);
+        self::assertArrayHasKey('2026-11-04', $store['calendars'][7]['days']);
+    }
+
+    public function testCutoffDayWithoutEntryIsFlaggedEvenWhenItsSessionsAreReturned(): void
+    {
+        $this->free('2026-11-02T21:30:00+0000');
+        $this->free('2026-11-02T22:00:00+0000');
+
+        [$report, $store] = $this->build(self::MONDAY_0245);
+
+        $day = self::day($report, '2026-11-02');
+        self::assertTrue($day->hoursUnknown);
+        self::assertSame(['21:30-22:30 free 21:30 live, 22:00 live'], self::slots($day));
+        self::assertArrayNotHasKey('2026-11-02', $store['calendars'][7]['days']);
+    }
+
+    public function testMarginDecidesWhetherTheNextDateIsWhole(): void
+    {
+        // 05:00 + 18 h + 1 h = Monday 00:00 exactly.
+        [$onTime, $storeOnTime] = $this->build('2026-11-01 05:00');
+        [$late, $storeLate] = $this->build('2026-11-01 05:01');
+
+        self::assertFalse(self::day($onTime, '2026-11-02')->hoursUnknown);
+        self::assertArrayHasKey('2026-11-02', $storeOnTime['calendars'][7]['days']);
+        self::assertTrue(self::day($late, '2026-11-02')->hoursUnknown);
+        self::assertArrayNotHasKey('2026-11-02', $storeLate['calendars'][7]['days']);
+    }
+
+    public function testFarEndNeedsTheWholeDateInsideBookableUntil(): void
+    {
+        // With 4 days ahead, bookableUntil is run start + 3 days.
+        $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00')]);
+
+        [, $exact] = $this->build('2026-10-31 00:00', $store, ['max_days_ahead' => 4]);
+        [, $short] = $this->build('2026-10-30 23:59', $store, ['max_days_ahead' => 4]);
+
+        self::assertSame(self::entry('2026-10-31T00:00:00+00:00'), $exact['calendars'][7]['days']['2026-11-02']);
+        self::assertSame(self::entry(self::AS_OF, '21:30-22:00'), $short['calendars'][7]['days']['2026-11-02']);
+    }
+
+    public function testShortClockChangeDateEndsAtItsNextLocalMidnight(): void
+    {
+        // bookableUntil = 2027-03-29 00:00 BST: 28 March (23 hours long) fits.
+        [, $store] = $this->build('2027-03-25 00:00', settings: ['max_days_ahead' => 5]);
+
+        self::assertArrayHasKey('2027-03-28', $store['calendars'][7]['days']);
+        self::assertArrayNotHasKey('2027-03-29', $store['calendars'][7]['days']);
+    }
+
+    public function testMixedDurationsAreSavedApartAndABookingDropsOnlyOne(): void
+    {
+        $this->addType(43, 60);
+        $this->free('2026-11-02T21:30:00+0000', 42);
+        $this->free('2026-11-02T21:30:00+0000', 43);
+        [, $store] = $this->build(settings: ['appointment_type_ids' => [42, 43]]);
+        self::assertSame(['21:30-22:00', '21:30-22:30'], $store['calendars'][7]['days']['2026-11-02']['hours']);
+
+        $this->times = [];
+        $this->book('2026-11-02T22:00:00+0000');
+        [$report] = $this->build('2026-11-10 12:00', $store, ['appointment_type_ids' => [42, 43]]);
+
+        self::assertSame(
+            ['21:30-22:00 free 21:30 stored', '22:00-22:30 booked 22:00 live'],
+            self::slots(self::day($report, '2026-11-02')),
+        );
+    }
+
+    public function testIdenticalSlotsFromTwoTypesAreSavedOnce(): void
+    {
+        $this->addType(43, 30);
+        $this->free('2026-11-02T21:30:00+0000', 42);
+        $this->free('2026-11-02T21:30:00+0000', 43);
+
+        [$report, $store] = $this->build(settings: ['appointment_type_ids' => [42, 43]]);
+
+        self::assertSame(['21:30-22:00 free 21:30 live'], self::slots(self::day($report, '2026-11-02')));
+        self::assertSame(['21:30-22:00'], $store['calendars'][7]['days']['2026-11-02']['hours']);
+    }
+
+    public function testSlotCrossingMidnightIsLeftOutOfTheEntryOnly(): void
+    {
+        $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00', '22:00-22:30')]);
+        $this->free('2026-11-02T22:00:00+0000');
+        $this->book('2026-11-02T23:45:00+0000');
+
+        [$report, $after] = $this->build(store: $store);
+
+        // The entry is still replaced: the stale 21:30 hour does not survive.
+        self::assertSame(self::entry(self::OBSERVED, '22:00-22:30'), $after['calendars'][7]['days']['2026-11-02']);
+        self::assertStringContainsString('2026-11-02: a slot crosses midnight', implode("\n", $report->warnings));
+        self::assertSame(['22:00-22:30 free 22:00 live', '23:45-00:15 booked 23:45 live'], self::slots(self::day($report, '2026-11-02')));
+    }
+
     public function testOtherEntriesAreCarriedOverUnchanged(): void
     {
         $store = self::store(['2026-11-02' => self::entry(self::AS_OF), '2025-12-01' => self::entry(self::AS_OF, '21:30-22:00')]);
@@ -350,22 +379,12 @@ final class SeasonAvailabilityTest extends TestCase
 
     public function testNewlyListedTypeUsesExistingEntries(): void
     {
-        $this->types[] = ['id' => 43, 'name' => 'New', 'duration' => 30, 'active' => true, 'type' => 'service', 'calendarIDs' => [7]];
+        $this->addType(43, 30);
         $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00')]);
 
         [$report] = $this->build('2026-11-10 12:00', $store, ['appointment_type_ids' => [42, 43]]);
 
         self::assertSame(['21:30-22:00 free 21:30 stored'], self::slots(self::day($report, '2026-11-02')));
-    }
-
-    public function testMarginKeepsMondayUnobservableForARunAt0329(): void
-    {
-        $this->free('2026-11-02T22:00:00+0000');
-
-        [$report, $store] = $this->build('2026-11-02 03:29');
-
-        self::assertTrue(self::day($report, '2026-11-02')->hoursUnknown);
-        self::assertArrayNotHasKey('2026-11-02', $store['calendars'][7]['days']);
     }
 
     // --- Rebuild with an empty store ---
@@ -380,19 +399,7 @@ final class SeasonAvailabilityTest extends TestCase
         self::assertSame(['21:30-22:30 free 21:30 live, 22:00 live'], self::slots(self::day($report, '2026-11-02')));
     }
 
-    public function testIdenticalSlotsFromTwoTypesCountOnce(): void
-    {
-        $this->types[] = ['id' => 43, 'name' => 'Other', 'duration' => 30, 'active' => true, 'type' => 'service', 'calendarIDs' => [7]];
-        $this->free('2026-11-02T21:30:00+0000', 42);
-        $this->free('2026-11-02T21:30:00+0000', 43);
-
-        [$report, $store] = $this->build(settings: ['appointment_type_ids' => [42, 43]]);
-
-        self::assertSame(['21:30-22:00 free 21:30 live'], self::slots(self::day($report, '2026-11-02')));
-        self::assertSame(['21:30-22:00'], $store['calendars'][7]['days']['2026-11-02']['hours']);
-    }
-
-    public function testSundayRunShowsMondayAndFlagsSunday(): void
+    public function testFirstRunShowsMondayAndFlagsTheCutoffDay(): void
     {
         $this->free('2026-11-02T21:30:00+0000');
         $this->free('2026-11-02T22:00:00+0000');
@@ -405,32 +412,13 @@ final class SeasonAvailabilityTest extends TestCase
         self::assertTrue(self::day($report, '2026-11-01')->hoursUnknown);
     }
 
-    public function testCutoffAt2145FlagsTheDayButKeeps2200(): void
-    {
-        $this->free('2026-11-02T22:00:00+0000');
-
-        [$report] = $this->build('2026-11-02 02:45');
-
-        $day = self::day($report, '2026-11-02');
-        self::assertTrue($day->hoursUnknown);
-        self::assertSame(['22:00-22:30 free 22:00 live'], self::slots($day));
-    }
-
-    public function testCutoffExactlyAtSessionStartIsNotFlagged(): void
-    {
-        $this->free('2026-11-02T21:30:00+0000');
-
-        [$report] = $this->build('2026-11-02 02:30');
-
-        self::assertFalse(self::day($report, '2026-11-02')->hoursUnknown);
-    }
-
     public function testDayAfterBookableUntilIsFlaggedAndWarned(): void
     {
+        // bookableUntil = Monday 9 Nov 16:00.
         [$report] = $this->build(settings: ['max_days_ahead' => 10]);
 
-        self::assertFalse(self::day($report, '2026-11-09')->hoursUnknown);
-        self::assertTrue(self::day($report, '2026-11-16')->hoursUnknown);
+        self::assertFalse(self::day($report, '2026-11-08')->hoursUnknown);
+        self::assertTrue(self::day($report, '2026-11-09')->hoursUnknown);
         self::assertStringContainsString('season ends after the booking horizon', implode("\n", $report->warnings));
     }
 
@@ -485,6 +473,16 @@ final class SeasonAvailabilityTest extends TestCase
     }
 
     // --- Validation and failures ---
+
+    public function testImpossibleDateInTheApiIsRejected(): void
+    {
+        $this->times[42]['2026-11-02'] = ['2026-11-31T21:30:00+0000'];
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage("'time' is not a valid time");
+
+        $this->build();
+    }
 
     public function testFullAppointmentsPageFails(): void
     {
@@ -568,22 +566,19 @@ final class SeasonAvailabilityTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('not in the report');
 
-        $this->availability(self::SUNDAY_1600)->build(SnapshotStore::empty(), 8);
+        $this->availability(self::SATURDAY_1600)->build(SnapshotStore::empty(), 8);
     }
 
     public function testDebugOutputShowsStatusSourceAndFlags(): void
     {
-        $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00')]);
+        $store = self::store(['2026-11-02' => self::entry(self::AS_OF, '21:30-22:00', '22:00-22:30')]);
         $this->free('2026-11-02T22:00:00+0000');
 
-        [$report] = $this->availability('2026-11-02 02:45')->build($store, 7);
+        [$report] = $this->availability(self::MONDAY_0245)->build($store, 7);
         $out = DebugTutorCommand::format($report);
 
         self::assertStringContainsString('Calendar 7: Tutor A', $out);
-        self::assertStringContainsString(
-            "2026-11-02 Mon  21:30 free stored " . self::AS_OF . ", 22:00 free live  [uses saved hours as of " . self::AS_OF . "]\n",
-            $out,
-        );
+        self::assertStringContainsString('2026-11-02 Mon  21:30 free stored ' . self::AS_OF . ", 22:00 free live\n", $out);
         self::assertStringContainsString("2026-11-01 Sun  -  [hours unknown]\n", $out);
         self::assertStringContainsString("2026-11-03 Tue  -\n", $out);
     }

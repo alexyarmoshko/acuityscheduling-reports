@@ -12,7 +12,7 @@ final class Config
 {
     private const KEYS = [
         'season_start', 'season_end', 'appointment_type_ids', 'min_notice_hours',
-        'max_days_ahead', 'session_window', 'exclude_calendars',
+        'max_days_ahead', 'exclude_calendars',
     ];
 
     /**
@@ -25,8 +25,6 @@ final class Config
         public readonly array $appointmentTypeIds,
         public readonly int $minNoticeHours,
         public readonly int $maxDaysAhead,
-        public readonly string $sessionStart,
-        public readonly string $sessionEnd,
         public readonly array $excludeCalendars,
     ) {
     }
@@ -92,20 +90,6 @@ final class Config
             throw new RuntimeException('season_start must not be after season_end');
         }
 
-        $window = $values['session_window'] ?? null;
-        if (!is_array($window) || count($window) !== 2 || !array_is_list($window)) {
-            throw new RuntimeException("session_window must be ['HH:MM', 'HH:MM']");
-        }
-        [$sessionStart, $sessionEnd] = $window;
-        foreach ([$sessionStart, $sessionEnd] as $time) {
-            if (!is_string($time) || preg_match('/\A([01]\d|2[0-3]):[0-5]\d\z/', $time) !== 1) {
-                throw new RuntimeException("session_window times must be HH:MM");
-            }
-        }
-        if ($sessionStart >= $sessionEnd) {
-            throw new RuntimeException('session_window start must be before its end');
-        }
-
         return new self(
             $start,
             $end,
@@ -114,8 +98,6 @@ final class Config
             self::idList($values['appointment_type_ids'] ?? null, 'appointment_type_ids'),
             self::int($values, 'min_notice_hours', 0),
             self::int($values, 'max_days_ahead', 1),
-            $sessionStart,
-            $sessionEnd,
             self::idList($values['exclude_calendars'] ?? [], 'exclude_calendars'),
         );
     }

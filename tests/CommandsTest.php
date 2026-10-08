@@ -48,7 +48,6 @@ final class CommandsTest extends TestCase
             'appointment_type_ids' => $typeIds,
             'min_notice_hours' => 18,
             'max_days_ahead' => 287,
-            'session_window' => ['21:30', '22:30'],
         ]);
     }
 

@@ -48,9 +48,12 @@ Options:
 Settings are read from config.php (copy config.example.php) and credentials
 from .env (ACUITY_USER_ID, ACUITY_API_KEY).
 
-Each report run saves the hours it could see to data/availability-cache.json.
-Later runs use them for days the API no longer shows; such days are marked
-"uses saved hours as of" the run that saved them.
+Each report run saves the hours of every day it can see in full to
+data/availability-cache.json. Later runs fill in hours the API no longer
+shows (past days, the minimum-notice period) from these saved hours.
+To save every season day, make the first run at least min_notice_hours + 1
+hours before the season's first day begins, while the season still ends at
+least a day inside max_days_ahead.
 
 TXT;
 

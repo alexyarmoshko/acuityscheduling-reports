@@ -13,9 +13,10 @@ use RuntimeException;
 /**
  * Retrieval and rebuild (plan: "Retrieval and rebuild").
  *
- * Reads each calendar's free slots and bookings for the season, fills the part
- * of each day the API cannot show from the snapshot store, and returns the
- * report data together with the updated store.
+ * Reads each calendar's free slots and bookings for the season, fills what the
+ * API cannot show (too soon or too far ahead) from the snapshot store, and
+ * returns the report data together with the updated store. Only dates this
+ * run sees whole are saved.
  *
  * Instants are Unix timestamps and intervals are half-open [start, end).
  * Dates and clock times are local to Europe/London.
@@ -45,7 +46,7 @@ final class SeasonAvailability
         $this->tz = new DateTimeZone(self::TIMEZONE);
         $this->runStart = $runStart->setTimezone($this->tz);
         // The margins keep the window valid for every request of the run
-        // (plan: "Observable slots").
+        // (plan: "Observation window and whole dates").
         $this->bookableFrom = $this->runStart->getTimestamp() + ($config->minNoticeHours + 1) * 3600;
         $this->bookableUntil = $this->runStart->modify('+' . ($config->maxDaysAhead - 1) . ' days')->getTimestamp();
     }
@@ -68,10 +69,13 @@ final class SeasonAvailability
             }
         }
 
-        $dates = $this->seasonDates();
+        $dates = [];
+        foreach ($this->seasonDates() as $date) {
+            $dates[$date] = $this->fullyObservable($date);
+        }
         if ($this->seasonEnd()->getTimestamp() > $this->bookableUntil) {
             $this->warnings[] = 'The season ends after the booking horizon (' . $this->local($this->bookableUntil)->format('Y-m-d H:i')
-                . '): later days use saved hours or are marked hours unknown';
+                . '): later days show saved hours, or are marked hours unknown';
         }
         $observedAt = $this->runStart->format(DATE_ATOM);
 
@@ -85,9 +89,9 @@ final class SeasonAvailability
             $entries = $store['calendars'][$tutor->id]['days'] ?? [];
 
             $days = [];
-            foreach ($dates as $date) {
-                $days[$date] = $this->day($tutor->name, $date, $free[$date] ?? [], $booked[$date] ?? [], $entries[$date] ?? null);
-                if ($this->fullyObservable($date)) {
+            foreach ($dates as $date => $fullyObservable) {
+                $days[$date] = $this->day($tutor->name, $date, $fullyObservable, $free[$date] ?? [], $booked[$date] ?? [], $entries[$date] ?? null);
+                if ($fullyObservable) {
                     [$hours, $crossesMidnight] = $this->hours($date, $free[$date] ?? [], $booked[$date] ?? []);
                     $entries[$date] = ['observedAt' => $observedAt, 'hours' => $hours];
                     if ($crossesMidnight) {
@@ -263,60 +267,49 @@ final class SeasonAvailability
     }
 
     /**
-     * Applies the snapshot rules to one date (plan: "Snapshot store", rules table).
+     * Applies the snapshot rules to one date, in the plan's order (retrieval
+     * step 5): bookings, then live free slots that overlap no booking, then
+     * stored hours this run cannot observe and live data does not cover.
      *
      * @param list<array{int, int}> $free
      * @param list<array{start: int, end: int, typeName: ?string}> $booked
      * @param array{observedAt: string, hours: list<string>}|null $entry
      */
-    private function day(string $calendarName, string $date, array $free, array $booked, ?array $entry): Day
+    private function day(string $calendarName, string $date, bool $fullyObservable, array $free, array $booked, ?array $entry): Day
     {
-        [$windowStart, $windowEnd] = $this->sessionWindow($date);
         $bookedIntervals = array_map(static fn (array $b): array => [$b['start'], $b['end']], $booked);
 
-        // The part of the session window this run can neither observe nor
-        // cover with a live slot or booking.
-        $covered = array_merge($free, $bookedIntervals);
-        $from = max($windowStart, $this->bookableFrom);
-        $until = min($windowEnd, $this->bookableUntil);
-        if ($from < $until) {
-            $covered[] = [$from, $until];
+        // A live free slot overlapping a booking is dropped whole, never
+        // clipped. It is not expected with one appointment per slot.
+        $live = [];
+        foreach ($free as $interval) {
+            if (Intervals::overlapsAny($interval, $bookedIntervals)) {
+                $this->warnings[] = "{$calendarName}, {$date} " . $this->local($interval[0])->format('H:i')
+                    . ': a free slot overlaps a booking and is not shown';
+                continue;
+            }
+            $live[] = $interval;
         }
-        $unresolved = Intervals::subtract([[$windowStart, $windowEnd]], $covered);
 
-        $candidates = [];
-        foreach ($free as [$start, $end]) {
-            $candidates[] = [$start, $end, Slot::LIVE];
-        }
+        $kept = array_map(static fn (array $i): array => [$i[0], $i[1], Slot::LIVE], $live);
         $hoursUnknown = false;
-        $asOf = null;
-        if ($unresolved !== []) {
+        $storedAt = null;
+        if (!$fullyObservable) {
             if ($entry === null) {
                 $hoursUnknown = true;
             } else {
-                // The entry decides the unresolved part, whether it holds hours there or none.
-                $asOf = $entry['observedAt'];
+                // Live data has priority: a stored hour is used only where this
+                // run could not look, and where no booking or surviving live
+                // slot covers it. A stored hour since booked is dropped silently.
+                $occupied = array_merge($bookedIntervals, $live);
                 foreach ($entry['hours'] as $hours) {
                     $interval = $this->storedInterval($date, $hours);
-                    if (Intervals::overlapsAny($interval, $unresolved)) {
-                        $candidates[] = [$interval[0], $interval[1], Slot::STORED];
+                    if (!$this->observable($interval) && !Intervals::overlapsAny($interval, $occupied)) {
+                        $kept[] = [$interval[0], $interval[1], Slot::STORED];
+                        $storedAt = $entry['observedAt'];
                     }
                 }
             }
-        }
-
-        // A free slot overlapping a booking is dropped whole, never clipped.
-        // Only a live one is unexpected: a stored hour may since have been booked.
-        $kept = [];
-        foreach ($candidates as $candidate) {
-            if (Intervals::overlapsAny([$candidate[0], $candidate[1]], $bookedIntervals)) {
-                if ($candidate[2] === Slot::LIVE) {
-                    $this->warnings[] = "{$calendarName}, {$date} " . $this->local($candidate[0])->format('H:i')
-                        . ': a free slot overlaps a booking and is not shown';
-                }
-                continue;
-            }
-            $kept[] = $candidate;
         }
 
         $slots = [];
@@ -330,7 +323,7 @@ final class SeasonAvailability
         usort($slots, static fn (Slot $a, Slot $b): int
             => [$a->start->getTimestamp(), $a->end->getTimestamp()] <=> [$b->start->getTimestamp(), $b->end->getTimestamp()]);
 
-        return new Day($date, $hoursUnknown, $asOf, $slots);
+        return new Day($date, $hoursUnknown, $storedAt, $slots);
     }
 
     /**
@@ -361,7 +354,8 @@ final class SeasonAvailability
     }
 
     /**
-     * The date's hours for the store: free ∪ booked, normalised.
+     * The date's hours for the store: one interval per free or booked slot,
+     * sorted and de-duplicated, never merged (plan: "Snapshot store", Format).
      *
      * @param list<array{int, int}> $free
      * @param list<array{start: int, end: int, typeName: ?string}> $booked
@@ -374,7 +368,7 @@ final class SeasonAvailability
 
         $hours = [];
         $crossesMidnight = false;
-        foreach (Intervals::normalize($intervals) as [$startAt, $endAt]) {
+        foreach ($intervals as [$startAt, $endAt]) {
             $start = $this->local($startAt);
             $end = $this->local($endAt);
             if ($start->format('Y-m-d') !== $date || $end->format('Y-m-d') !== $date) {
@@ -383,24 +377,25 @@ final class SeasonAvailability
             }
             $hours[] = $start->format('H:i') . '-' . $end->format('H:i');
         }
+        $hours = array_values(array_unique($hours));
+        sort($hours);
 
         return [$hours, $crossesMidnight];
     }
 
+    /** The whole local date, 00:00 to the next 00:00, lies inside the observation window. */
     private function fullyObservable(string $date): bool
     {
-        [$start, $end] = $this->sessionWindow($date);
+        $start = new DateTimeImmutable("{$date} 00:00", $this->tz);
 
-        return $start >= $this->bookableFrom && $end <= $this->bookableUntil;
+        // modify() keeps local midnight, so a 23- or 25-hour date ends right.
+        return $this->observable([$start->getTimestamp(), $start->modify('+1 day')->getTimestamp()]);
     }
 
-    /** @return array{int, int} */
-    private function sessionWindow(string $date): array
+    /** @param array{int, int} $interval */
+    private function observable(array $interval): bool
     {
-        return [
-            $this->at($date, $this->config->sessionStart),
-            $this->at($date, $this->config->sessionEnd),
-        ];
+        return $interval[0] >= $this->bookableFrom && $interval[1] <= $this->bookableUntil;
     }
 
     /** @return array{int, int} */
