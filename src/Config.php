@@ -12,11 +12,12 @@ final class Config
 {
     private const KEYS = [
         'season_start', 'season_end', 'appointment_type_ids', 'min_notice_hours',
-        'max_days_ahead', 'exclude_calendars',
+        'max_days_ahead', 'include_calendars', 'exclude_calendars',
     ];
 
     /**
      * @param list<int> $appointmentTypeIds
+     * @param list<int> $includeCalendars empty = all calendars
      * @param list<int> $excludeCalendars
      */
     private function __construct(
@@ -25,6 +26,7 @@ final class Config
         public readonly array $appointmentTypeIds,
         public readonly int $minNoticeHours,
         public readonly int $maxDaysAhead,
+        public readonly array $includeCalendars,
         public readonly array $excludeCalendars,
     ) {
     }
@@ -98,6 +100,7 @@ final class Config
             self::idList($values['appointment_type_ids'] ?? null, 'appointment_type_ids'),
             self::int($values, 'min_notice_hours', 0),
             self::int($values, 'max_days_ahead', 1),
+            self::idList($values['include_calendars'] ?? [], 'include_calendars'),
             self::idList($values['exclude_calendars'] ?? [], 'exclude_calendars'),
         );
     }

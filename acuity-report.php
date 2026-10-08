@@ -29,30 +29,35 @@ require_once __DIR__ . '/src/SeasonAvailability.php';
 require_once __DIR__ . '/src/DebugTutorCommand.php';
 require_once __DIR__ . '/src/ReportRenderer.php';
 require_once __DIR__ . '/src/ReportCommand.php';
+require_once __DIR__ . '/src/RenderOnlyCommand.php';
 require_once __DIR__ . '/src/ErrorReporter.php';
 
 const USAGE = <<<'TXT'
 Usage: php acuity-report.php [options]
 
-Builds a self-contained HTML report of each Acuity calendar's free and booked
-slots for the season set in config.php.
+Builds a self-contained HTML report of the sessions set up in each Acuity
+calendar for the season set in config.php.
 
 Options:
   --out=FILE          Write the report to FILE
                       (default: out/availability-YYYY-MM-DD_HHMMSS.html)
+  --render-only       Write the report from the saved data only: no API calls,
+                      no .env needed, saved data unchanged
   --list              List calendars and appointment types with their IDs
-  --debug-tutor=ID    Print free and booked starts per date for one calendar,
-                      with their source (live, or stored and when); writes
-                      nothing
+  --debug-tutor=ID    Print the slots per date for one calendar, each free or
+                      booked, with its source (live, or stored and when);
+                      writes nothing
   --spike             Save sample API responses to spike/ (development)
   --help              Show this help
 
 Settings are read from config.php (copy config.example.php) and credentials
 from .env (ACUITY_USER_ID, ACUITY_API_KEY).
 
-Each report run saves the hours of every day it can see in full to
-data/availability-cache.json. Later runs fill in hours the API no longer
-shows (past days, the minimum-notice period) from these saved hours.
+Each report run saves every day's sessions to data/availability-cache.json,
+cumulatively: what the API shows now replaces the saved sessions, and what
+it no longer shows (past days, the minimum-notice period) is kept. Calendars
+no longer offering a listed type are removed. include_calendars and
+exclude_calendars in config.php choose the calendars to report.
 To save every season day, make the first run at least min_notice_hours + 1
 hours before the season's first day begins, while the season still ends at
 least a day inside max_days_ahead.
@@ -65,7 +70,7 @@ TXT;
  */
 function parseArgs(array $args): array
 {
-    $flags = ['help', 'list', 'spike'];
+    $flags = ['help', 'list', 'spike', 'render-only'];
     $valued = ['out', 'debug-tutor'];
 
     // Errors never echo user input except a recognised option name: a
@@ -116,6 +121,11 @@ function main(array $argv): int
 
     try {
         $config = Config::load(__DIR__ . '/config.php');
+        if (isset($options['render-only'])) {
+            // Saved data only: no credentials are read.
+            echo RenderOnlyCommand::run($config, __DIR__ . '/data', __DIR__ . '/out', $options['out'] ?? null, new \DateTimeImmutable());
+            return 0;
+        }
         $client = new AcuityClient(Credentials::fromEnv(Env::load(__DIR__ . '/.env')));
 
         if (isset($options['list'])) {

@@ -190,6 +190,30 @@ final class SnapshotStoreTest extends TestCase
         self::assertSame($store, SnapshotStore::load($this->data));
     }
 
+    public function testFullFileRoundTripsAndTheOlderShapeLoads(): void
+    {
+        $full = [
+            'version' => 1,
+            'lastRun' => [
+                'generatedAt' => '2026-10-07T14:32:07+01:00', 'seasonStart' => '2026-11', 'seasonEnd' => '2027-03',
+                'types' => [['id' => 42, 'name' => 'Lesson', 'duration' => 30]],
+                'bookableFrom' => '2026-10-08T09:32:07+01:00', 'bookableUntil' => '2027-07-20T14:32:07+01:00', 'warnings' => ['w'],
+            ],
+            'calendars' => [7 => [
+                'name' => 'Tutor A', 'reportedAt' => '2026-10-07T14:32:07+01:00',
+                'types' => [['id' => 42, 'name' => 'Lesson', 'duration' => 30]],
+                'days' => ['2026-11-02' => ['observedAt' => '2026-10-07T14:32:07+01:00', 'hours' => ['21:30-22:00'], 'complete' => false]],
+            ]],
+        ];
+
+        $this->publish($full);
+        self::assertSame($full, SnapshotStore::load($this->data));
+
+        // The shape written before step 5: no lastRun, reportedAt, types or complete.
+        $this->publish(self::store());
+        self::assertSame(self::store(), SnapshotStore::load($this->data));
+    }
+
     public function testTouchingAndOverlappingIntervalsAreValid(): void
     {
         SnapshotStore::validate(self::store(['21:30-22:00', '22:00-22:30']));
@@ -218,6 +242,21 @@ final class SnapshotStoreTest extends TestCase
         yield 'unordered starts' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00", "hours": ["22:00-22:30", "21:30-22:00"]}')];
         yield 'unordered ends' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00", "hours": ["21:30-22:30", "21:30-22:00"]}')];
         yield 'missing hours' => [$wrap('"2026-11-02": {"observedAt": "2026-10-07T14:32:07+01:00"}')];
+        yield 'complete not boolean' => [$wrap('"2026-11-02": {' . $entry . ', "complete": "yes"}')];
+        $calendar = static fn (string $extra): string => '{"version": 1, "calendars": {"7": {"name": "A", ' . $extra . '"days": {}}}}';
+        yield 'reportedAt not a time' => [$calendar('"reportedAt": "today", ')];
+        yield 'reportedAt null' => [$calendar('"reportedAt": null, ')];
+        yield 'types null' => [$calendar('"types": null, ')];
+        yield 'lastRun null' => ['{"version": 1, "lastRun": null, "calendars": {}}'];
+        yield 'types not a list' => [$calendar('"types": {"id": 1}, ')];
+        yield 'type id not positive' => [$calendar('"types": [{"id": 0, "name": "L", "duration": 30}], ')];
+        yield 'type duration missing' => [$calendar('"types": [{"id": 1, "name": "L"}], ')];
+        yield 'type name not a string' => [$calendar('"types": [{"id": 1, "name": 5, "duration": 30}], ')];
+        $lastRun = '"generatedAt": "2026-10-07T14:32:07+01:00", "seasonStart": "2026-11", "seasonEnd": "2027-03", "types": [],'
+            . ' "bookableFrom": "2026-10-08T09:32:07+01:00", "bookableUntil": "2027-07-20T14:32:07+01:00", "warnings": []';
+        yield 'lastRun missing a key' => ['{"version": 1, "lastRun": {"generatedAt": "2026-10-07T14:32:07+01:00"}, "calendars": {}}'];
+        yield 'lastRun bad season' => ['{"version": 1, "lastRun": {' . str_replace('"2026-11"', '"2026-13"', $lastRun) . '}, "calendars": {}}'];
+        yield 'lastRun warning not a string' => ['{"version": 1, "lastRun": {' . str_replace('"warnings": []', '"warnings": [1]', $lastRun) . '}, "calendars": {}}'];
     }
 
     #[DataProvider('invalidFiles')]

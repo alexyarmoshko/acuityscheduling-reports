@@ -8,7 +8,7 @@ use Closure;
 use DateTimeImmutable;
 
 /**
- * `--debug-tutor=<id>`: one line per season date for one calendar, each start
+ * `--debug-tutor=<id>`: one line per season date for one calendar, each slot
  * with its status and source. Reads the snapshot store but never writes it.
  */
 final class DebugTutorCommand
@@ -38,9 +38,8 @@ final class DebugTutorCommand
         foreach ($season->days as $date => $day) {
             $parts = [];
             foreach ($day->slots as $slot) {
-                foreach ($slot->starts as $time => $source) {
-                    $parts[] = "{$time} {$slot->status} " . ($source === Slot::STORED ? "stored {$day->storedAt}" : 'live');
-                }
+                $parts[] = $slot->start->format('H:i') . '-' . $slot->end->format('H:i') . " {$slot->status} "
+                    . ($slot->source === Slot::STORED ? "stored {$day->storedAt}" : 'live');
             }
             $line = $date . ' ' . (new DateTimeImmutable($date))->format('D') . '  ' . ($parts === [] ? '-' : implode(', ', $parts));
             if ($day->hoursUnknown) {

@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace AcuityReport;
 
 /**
- * One calendar's slots on one local date.
+ * One calendar's configured slots on one local date, as saved by this run.
  *
- * $hoursUnknown: this run could not see the whole date and no snapshot entry
- * exists. $storedAt: the snapshot's observedAt when a stored slot is shown
- * (for --debug-tutor; the report page does not show it).
+ * $hoursUnknown: no run has seen the whole date yet, so further hours may be
+ * missing. $storedAt: the saved entry's observedAt when a saved slot is shown
+ * (for --debug-tutor).
  */
 final class Day
 {
-    /** @param list<Slot> $slots ordered by start */
+    /** @param list<Slot> $slots ordered by start, then end */
     public function __construct(
         public readonly string $date,
         public readonly bool $hoursUnknown,

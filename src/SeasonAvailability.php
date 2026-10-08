@@ -11,12 +11,14 @@ use Exception;
 use RuntimeException;
 
 /**
- * Retrieval and rebuild (plan: "Retrieval and rebuild").
+ * Retrieval and the cumulative saved days (plan: "Retrieval and rebuild" and
+ * step 5).
  *
- * Reads each calendar's free slots and bookings for the season, fills what the
- * API cannot show (too soon or too far ahead) from the snapshot store, and
- * returns the report data together with the updated store. Only dates this
- * run sees whole are saved.
+ * Reads each reported calendar's free slots and bookings for the season and
+ * updates its saved days. A date this run sees whole is replaced. On any other
+ * date, what this run can see replaces the saved slots for that part, and the
+ * saved slots it cannot see are kept. Booked or not, a slot is a configured
+ * slot. Withdrawn calendars are removed from the store.
  *
  * Instants are Unix timestamps and intervals are half-open [start, end).
  * Dates and clock times are local to Europe/London.
@@ -52,21 +54,54 @@ final class SeasonAvailability
     }
 
     /**
-     * @param array{version: int, calendars: array<int, array{name: string, days: array<string, array{observedAt: string, hours: list<string>}>}>} $store
-     *        as returned by SnapshotStore::load()
+     * @param array<string, mixed> $store as returned by SnapshotStore::load()
      * @param int|null $onlyCalendar build this calendar only (--debug-tutor)
-     * @return array{Report, array{version: int, calendars: array}} the report data and the store to publish
+     * @return array{Report, array<string, mixed>} what this run built, and the store to publish
      */
     public function build(array $store, ?int $onlyCalendar = null): array
     {
         $this->warnings = [];
         $types = $this->validTypes();
-        $tutors = $this->tutors($types);
-        if ($onlyCalendar !== null) {
-            $tutors = array_values(array_filter($tutors, static fn (array $t): bool => $t[0]->id === $onlyCalendar));
-            if ($tutors === []) {
-                throw new RuntimeException('That calendar is not in the report: it is excluded, or offers none of the listed appointment types');
+        if ($types === []) {
+            throw new RuntimeException('None of appointment_type_ids is a valid appointment type (see the warnings above): nothing was written');
+        }
+        [$names, $tutorTypes] = $this->calendars($types);
+
+        // A calendar is reported when it offers a valid listed type, is in
+        // include_calendars (if set), and is not excluded.
+        $include = $this->config->includeCalendars;
+        foreach ($include as $id) {
+            if (!isset($tutorTypes[$id])) {
+                $this->warnings[] = "Calendar {$id} in include_calendars is not a tutor calendar (not found, or offers none of the listed types)";
             }
+        }
+        $reported = [];
+        foreach ($tutorTypes as $id => $typeIds) {
+            if (($include === [] || in_array($id, $include, true)) && !in_array($id, $this->config->excludeCalendars, true)) {
+                $reported[$id] = $typeIds;
+            }
+        }
+        if ($onlyCalendar !== null) {
+            if (!isset($reported[$onlyCalendar])) {
+                throw new RuntimeException('That calendar is not in the report: it is excluded, not included, or offers none of the listed appointment types');
+            }
+            $reported = [$onlyCalendar => $reported[$onlyCalendar]];
+        }
+
+        // Withdrawn calendars: missing from /calendars or offering none of the
+        // valid listed types. A run limited by include_calendars checks only
+        // those calendars. Exclusion does not protect a withdrawn calendar.
+        $removed = [];
+        if ($onlyCalendar === null) {
+            foreach (array_keys($store['calendars']) as $id) {
+                if (!isset($tutorTypes[$id]) && ($include === [] || in_array($id, $include, true))) {
+                    $removed[] = ['id' => $id, 'name' => $store['calendars'][$id]['name']];
+                    unset($store['calendars'][$id]);
+                }
+            }
+        }
+        if ($reported === []) {
+            $this->warnings[] = 'No tutor calendars to show (check appointment_type_ids, include_calendars and exclude_calendars)';
         }
 
         $dates = [];
@@ -75,32 +110,44 @@ final class SeasonAvailability
         }
         if ($this->seasonEnd()->getTimestamp() > $this->bookableUntil) {
             $this->warnings[] = 'The season ends after the booking horizon (' . $this->local($this->bookableUntil)->format('Y-m-d H:i')
-                . '): later days show saved hours, or are marked hours unknown';
+                . '): later days show what earlier runs saw, or are marked hours unknown';
         }
         $observedAt = $this->runStart->format(DATE_ATOM);
 
         $seasons = [];
-        foreach ($tutors as $n => [$tutor, $typeIds]) {
+        $n = 0;
+        foreach ($reported as $id => $typeIds) {
+            $tutor = new Tutor($id, $names[$id]);
             if ($this->progress !== null) {
-                ($this->progress)(sprintf('Calendar %d/%d: %s', $n + 1, count($tutors), $tutor->name));
+                ($this->progress)(sprintf('Calendar %d/%d: %s', ++$n, count($reported), $tutor->name));
             }
-            $free = $this->freeSlots($tutor->id, $typeIds, $types);
-            $booked = $this->bookings($tutor->id);
-            $entries = $store['calendars'][$tutor->id]['days'] ?? [];
+            $free = $this->freeSlots($id, $typeIds, $types);
+            $booked = $this->bookings($id);
+            $entries = $store['calendars'][$id]['days'] ?? [];
 
             $days = [];
             foreach ($dates as $date => $fullyObservable) {
-                $days[$date] = $this->day($tutor->name, $date, $fullyObservable, $free[$date] ?? [], $booked[$date] ?? [], $entries[$date] ?? null);
-                if ($fullyObservable) {
-                    [$hours, $crossesMidnight] = $this->hours($date, $free[$date] ?? [], $booked[$date] ?? []);
-                    $entries[$date] = ['observedAt' => $observedAt, 'hours' => $hours];
-                    if ($crossesMidnight) {
-                        $this->warnings[] = "{$tutor->name}, {$date}: a slot crosses midnight and is not saved with this date's hours";
-                    }
+                [$days[$date], $entry] = $this->day($tutor->name, $date, $fullyObservable, $free[$date] ?? [], $booked[$date] ?? [], $entries[$date] ?? null, $observedAt);
+                if ($entry !== null) {
+                    $entries[$date] = $entry;
                 }
             }
-            $store['calendars'][$tutor->id] = ['name' => $tutor->name, 'days' => $entries];
-            $seasons[] = new TutorSeason($tutor, $days);
+            $calendarTypes = array_map(static fn (int $t): array => self::typeSummary($types[$t]), $typeIds);
+            $store['calendars'][$id] = ['name' => $tutor->name, 'reportedAt' => $observedAt, 'types' => $calendarTypes, 'days' => $entries];
+            $seasons[] = new TutorSeason($tutor, $days, $calendarTypes);
+        }
+
+        $typeList = array_values(array_map(self::typeSummary(...), $types));
+        if ($onlyCalendar === null) {
+            $store['lastRun'] = [
+                'generatedAt' => $observedAt,
+                'seasonStart' => $this->config->seasonStart,
+                'seasonEnd' => $this->config->seasonEnd,
+                'types' => $typeList,
+                'bookableFrom' => $this->local($this->bookableFrom)->format(DATE_ATOM),
+                'bookableUntil' => $this->local($this->bookableUntil)->format(DATE_ATOM),
+                'warnings' => $this->warnings,
+            ];
         }
 
         $report = new Report(
@@ -108,17 +155,24 @@ final class SeasonAvailability
             $this->config->seasonEnd,
             $this->runStart,
             self::TIMEZONE,
-            array_values(array_map(
-                static fn (array $t): array => ['id' => $t['id'], 'name' => $t['name'], 'duration' => $t['duration']],
-                $types,
-            )),
+            $typeList,
             $this->local($this->bookableFrom),
             $this->local($this->bookableUntil),
             $seasons,
             $this->warnings,
+            $removed,
         );
 
         return [$report, $store];
+    }
+
+    /**
+     * @param array{id: int, name: string, duration: int} $type
+     * @return array{id: int, name: string, duration: int}
+     */
+    private static function typeSummary(array $type): array
+    {
+        return ['id' => $type['id'], 'name' => $type['name'], 'duration' => $type['duration']];
     }
 
     /** @return array<int, array{id: int, name: string, duration: int, calendarIDs: list<int>}> */
@@ -145,12 +199,18 @@ final class SeasonAvailability
                 $this->warnings[] = "Appointment type {$id} left out: {$problem}";
                 continue;
             }
-            $calendarIds = is_array($row['calendarIDs'] ?? null) ? $row['calendarIDs'] : [];
+            // Calendars are removed when they offer no valid type, so an
+            // incomplete type entry must stop the run rather than remove them.
+            $calendarIds = $row['calendarIDs'] ?? null;
+            if (!is_array($calendarIds) || !array_is_list($calendarIds)
+                || array_filter($calendarIds, static fn (mixed $c): bool => !is_numeric($c)) !== []) {
+                throw new RuntimeException("Unexpected /appointment-types response: type {$id} has no valid calendarIDs list. Nothing was written.");
+            }
             $valid[$id] = [
                 'id' => $id,
                 'name' => is_string($row['name'] ?? null) ? $row['name'] : "Type {$id}",
                 'duration' => (int) $row['duration'],
-                'calendarIDs' => array_values(array_map('intval', array_filter($calendarIds, 'is_numeric'))),
+                'calendarIDs' => array_map('intval', $calendarIds),
             ];
         }
 
@@ -158,38 +218,30 @@ final class SeasonAvailability
     }
 
     /**
-     * Calendars offering at least one valid listed type, minus exclusions.
+     * All calendars' names, and the valid listed types each tutor calendar offers.
      *
      * @param array<int, array{calendarIDs: list<int>}> $types
-     * @return list<array{Tutor, list<int>}> each with its type IDs
+     * @return array{array<int, string>, array<int, list<int>>}
      */
-    private function tutors(array $types): array
+    private function calendars(array $types): array
     {
-        $tutors = [];
+        $names = [];
+        $tutorTypes = [];
         foreach ($this->client->getList('/calendars') as $row) {
             // Only id and name are read; emails and other fields are dropped here.
             if (!is_array($row) || !is_numeric($row['id'] ?? null) || !is_string($row['name'] ?? null)) {
                 throw new RuntimeException('Unexpected /calendars response: missing id or name');
             }
             $id = (int) $row['id'];
-            if (in_array($id, $this->config->excludeCalendars, true)) {
-                continue;
-            }
-            $typeIds = [];
+            $names[$id] = $row['name'];
             foreach ($types as $typeId => $type) {
                 if (in_array($id, $type['calendarIDs'], true)) {
-                    $typeIds[] = $typeId;
+                    $tutorTypes[$id][] = $typeId;
                 }
             }
-            if ($typeIds !== []) {
-                $tutors[] = [new Tutor($id, $row['name']), $typeIds];
-            }
-        }
-        if ($tutors === []) {
-            throw new RuntimeException('No calendar offers any of the listed appointment types (check appointment_type_ids and exclude_calendars)');
         }
 
-        return $tutors;
+        return [$names, $tutorTypes];
     }
 
     /**
@@ -227,7 +279,7 @@ final class SeasonAvailability
         return array_map('array_values', $slots);
     }
 
-    /** @return array<string, list<array{start: int, end: int, typeName: ?string}>> by local date */
+    /** @return array<string, list<array{int, int}>> bookings by local date */
     private function bookings(int $calendarId): array
     {
         $bookings = [];
@@ -254,12 +306,7 @@ final class SeasonAvailability
                     throw new RuntimeException("Unexpected /appointments response: 'duration' is not a positive number");
                 }
                 $start = self::instant($row['datetime'] ?? null, '/appointments', 'datetime');
-                $type = $row['type'] ?? null;
-                $bookings[$this->local($start)->format('Y-m-d')][] = [
-                    'start' => $start,
-                    'end' => $start + (int) $duration * 60,
-                    'typeName' => is_string($type) && $type !== '' ? $type : null,
-                ];
+                $bookings[$this->local($start)->format('Y-m-d')][] = [$start, $start + (int) $duration * 60];
             }
         }
 
@@ -267,120 +314,69 @@ final class SeasonAvailability
     }
 
     /**
-     * Applies the snapshot rules to one date, in the plan's order (retrieval
-     * step 5): bookings, then live free slots that overlap no booking, then
-     * stored hours this run cannot observe and live data does not cover.
+     * The date's new saved entry and its Day (plan step 5).
      *
      * @param list<array{int, int}> $free
-     * @param list<array{start: int, end: int, typeName: ?string}> $booked
-     * @param array{observedAt: string, hours: list<string>}|null $entry
+     * @param list<array{int, int}> $booked
+     * @param array{observedAt: string, hours: list<string>, complete?: bool}|null $entry
+     * @return array{Day, array{observedAt: string, hours: list<string>, complete: bool}|null} the entry is null when nothing is written
      */
-    private function day(string $calendarName, string $date, bool $fullyObservable, array $free, array $booked, ?array $entry): Day
+    private function day(string $calendarName, string $date, bool $fullyObservable, array $free, array $booked, ?array $entry, string $observedAt): array
     {
-        $bookedIntervals = array_map(static fn (array $b): array => [$b['start'], $b['end']], $booked);
-
-        // A live free slot overlapping a booking is dropped whole, never
-        // clipped. It is not expected with one appointment per slot.
-        $live = [];
         foreach ($free as $interval) {
-            if (Intervals::overlapsAny($interval, $bookedIntervals)) {
+            if (Intervals::overlapsAny($interval, $booked)) {
                 $this->warnings[] = "{$calendarName}, {$date} " . $this->local($interval[0])->format('H:i')
-                    . ': a free slot overlaps a booking and is not shown';
-                continue;
+                    . ': a free slot overlaps a booking';
             }
-            $live[] = $interval;
         }
 
-        $kept = array_map(static fn (array $i): array => [$i[0], $i[1], Slot::LIVE], $live);
-        $hoursUnknown = false;
-        $storedAt = null;
-        if (!$fullyObservable) {
-            if ($entry === null) {
-                $hoursUnknown = true;
-            } else {
-                // Live data has priority: a stored hour is used only where this
-                // run could not look, and where no booking or surviving live
-                // slot covers it. A stored hour since booked is dropped silently.
-                $occupied = array_merge($bookedIntervals, $live);
-                foreach ($entry['hours'] as $hours) {
-                    $interval = $this->storedInterval($date, $hours);
-                    if (!$this->observable($interval) && !Intervals::overlapsAny($interval, $occupied)) {
-                        $kept[] = [$interval[0], $interval[1], Slot::STORED];
-                        $storedAt = $entry['observedAt'];
+        // interval key => [start, end, status, source]; bookings first, so a
+        // free slot identical to a booking is listed once, as booked.
+        $slots = [];
+        foreach ($booked as [$start, $end]) {
+            $slots["{$start}-{$end}"] = [$start, $end, Slot::BOOKED, Slot::LIVE];
+        }
+        foreach ($free as [$start, $end]) {
+            $slots["{$start}-{$end}"] ??= [$start, $end, Slot::FREE, Slot::LIVE];
+        }
+
+        $usedStored = false;
+        if ($fullyObservable) {
+            $complete = true;
+        } else {
+            // What this run cannot observe is kept from the saved entry, even
+            // under a booking: a booking does not remove a set-up slot.
+            foreach ($entry['hours'] ?? [] as $hours) {
+                $interval = $this->storedInterval($date, $hours);
+                if (!$this->observable($interval)) {
+                    $key = "{$interval[0]}-{$interval[1]}";
+                    if (!isset($slots[$key])) {
+                        $slots[$key] = [$interval[0], $interval[1], Slot::FREE, Slot::STORED];
+                        $usedStored = true;
                     }
                 }
             }
+            $complete = $entry !== null && ($entry['complete'] ?? true);
         }
-
-        $slots = [];
-        foreach ($this->mergeFree($kept) as $range) {
-            $slots[] = new Slot($this->local($range['start']), $this->local($range['end']), Slot::FREE, $range['starts']);
-        }
-        foreach ($booked as $booking) {
-            $start = $this->local($booking['start']);
-            $slots[] = new Slot($start, $this->local($booking['end']), Slot::BOOKED, [$start->format('H:i') => Slot::LIVE], $booking['typeName']);
-        }
-        usort($slots, static fn (Slot $a, Slot $b): int
-            => [$a->start->getTimestamp(), $a->end->getTimestamp()] <=> [$b->start->getTimestamp(), $b->end->getTimestamp()]);
-
-        return new Day($date, $hoursUnknown, $storedAt, $slots);
-    }
-
-    /**
-     * Merges overlapping or touching free slots into ranges.
-     *
-     * @param list<array{int, int, string}> $slots start, end, source
-     * @return list<array{start: int, end: int, starts: array<string, string>}>
-     */
-    private function mergeFree(array $slots): array
-    {
         usort($slots, static fn (array $a, array $b): int => [$a[0], $a[1]] <=> [$b[0], $b[1]]);
-        $ranges = [];
-        $last = -1;
-        foreach ($slots as [$start, $end, $source]) {
-            if ($last >= 0 && $start <= $ranges[$last]['end']) {
-                $ranges[$last]['end'] = max($ranges[$last]['end'], $end);
-            } else {
-                $ranges[++$last] = ['start' => $start, 'end' => $end, 'starts' => []];
-            }
-            $time = $this->local($start)->format('H:i');
-            // A start both returned live and stored is reported as live.
-            if (($ranges[$last]['starts'][$time] ?? null) !== Slot::LIVE) {
-                $ranges[$last]['starts'][$time] = $source;
-            }
-        }
-
-        return $ranges;
-    }
-
-    /**
-     * The date's hours for the store: one interval per free or booked slot,
-     * sorted and de-duplicated, never merged (plan: "Snapshot store", Format).
-     *
-     * @param list<array{int, int}> $free
-     * @param list<array{start: int, end: int, typeName: ?string}> $booked
-     * @return array{list<string>, bool} the hours, and whether an interval
-     *         crossing midnight was left out (HH:MM-HH:MM cannot hold it)
-     */
-    private function hours(string $date, array $free, array $booked): array
-    {
-        $intervals = array_merge($free, array_map(static fn (array $b): array => [$b['start'], $b['end']], $booked));
 
         $hours = [];
-        $crossesMidnight = false;
-        foreach ($intervals as [$startAt, $endAt]) {
-            $start = $this->local($startAt);
-            $end = $this->local($endAt);
-            if ($start->format('Y-m-d') !== $date || $end->format('Y-m-d') !== $date) {
-                $crossesMidnight = true;
+        $shown = [];
+        foreach ($slots as [$start, $end, $status, $source]) {
+            $from = $this->local($start);
+            $to = $this->local($end);
+            if ($from->format('Y-m-d') !== $date || $to->format('Y-m-d') !== $date) {
+                $this->warnings[] = "{$calendarName}, {$date}: a slot crosses midnight and is not saved with this date's hours";
                 continue;
             }
-            $hours[] = $start->format('H:i') . '-' . $end->format('H:i');
+            $hours[] = $from->format('H:i') . '-' . $to->format('H:i');
+            $shown[] = new Slot($from, $to, $status, $source);
         }
-        $hours = array_values(array_unique($hours));
-        sort($hours);
 
-        return [$hours, $crossesMidnight];
+        $write = $fullyObservable || $hours !== [] || $entry !== null;
+        $newEntry = $write ? ['observedAt' => $observedAt, 'hours' => $hours, 'complete' => $complete] : null;
+
+        return [new Day($date, !$complete, $usedStored ? $entry['observedAt'] : null, $shown), $newEntry];
     }
 
     /** The whole local date, 00:00 to the next 00:00, lies inside the observation window. */

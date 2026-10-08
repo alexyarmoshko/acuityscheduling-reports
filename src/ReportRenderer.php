@@ -6,14 +6,17 @@ namespace AcuityReport;
 
 use DateTimeImmutable;
 use DateTimeZone;
+use RuntimeException;
 
 /**
- * Report → one self-contained HTML page (plan: "Report page").
+ * Saved store → one self-contained HTML page (plan: "Report page" and step 5).
  *
- * The header and footer are rendered here, HTML-escaped. Tutors and their
- * slots go into one JSON block that the page's script reads; that block is
- * JSON-encoded with <, > and & escaped, and is not HTML-escaped. Everything is
- * pre-formatted in Europe/London, so the page does no time zone conversion.
+ * A report run and --render-only both render from the store, so they give the
+ * same page from the same file. The header and footer come from `lastRun` and
+ * are rendered here, HTML-escaped. Calendars and their configured slots go into
+ * one JSON block that the page's script reads; that block is JSON-encoded with
+ * <, > and & escaped, and is not HTML-escaped. Everything is pre-formatted in
+ * Europe/London, so the page does no time zone conversion.
  */
 final class ReportRenderer
 {
@@ -24,37 +27,45 @@ final class ReportRenderer
         return 'availability-' . $runStart->format('Y-m-d_His') . '.html';
     }
 
-    public static function render(Report $report): string
+    /**
+     * @param array<string, mixed> $store as loaded, or as built by a report run
+     * @param list<int> $include include_calendars (empty = all)
+     * @param list<int> $exclude exclude_calendars
+     */
+    public static function render(array $store, array $include = [], array $exclude = []): string
     {
-        $tz = new DateTimeZone($report->timezone);
-        $generated = $report->generatedAt->setTimezone($tz);
-        $seasonEnd = (new DateTimeImmutable($report->seasonEnd . '-01', $tz))->modify('first day of next month');
-
-        $footer = [
-            'Hours are rebuilt from free and booked sessions in Acuity.',
-            'Bookings and free slots read in this run are current. Hours before '
-                . self::shortTime($report->bookableFrom, $tz)
-                . ' that were too soon to read are filled in from the last run that saw the day in full.',
-        ];
-        if ($seasonEnd > $report->bookableUntil) {
-            $footer[] = 'Hours after ' . self::shortTime($report->bookableUntil, $tz)
-                . ' that were too far ahead to read are filled in the same way.';
+        $run = $store['lastRun'] ?? null;
+        if (!is_array($run)) {
+            throw new RuntimeException('No saved report yet: run once without --render-only');
         }
-        $footer[] = "On an 'hours unknown' day, the bookings and free slots shown are from this run, but further"
-            . ' hours may be missing: part of the day was too soon or too far ahead to read, and no earlier run saw it whole.';
-        $footer[] = 'Time a tutor has blocked off is not shown.';
+        $tz = new DateTimeZone(SeasonAvailability::TIMEZONE);
+        $generated = (new DateTimeImmutable($run['generatedAt']))->setTimezone($tz);
+        $from = (new DateTimeImmutable($run['bookableFrom']))->setTimezone($tz);
+        $until = (new DateTimeImmutable($run['bookableUntil']))->setTimezone($tz);
+        $seasonEnd = (new DateTimeImmutable($run['seasonEnd'] . '-01', $tz))->modify('first day of next month');
+
+        $readable = 'Each day shows what the latest run could read, plus what earlier runs saw for the parts it could not: before '
+            . $from->format('j M H:i') . ' (too soon)';
+        if ($seasonEnd > $until) {
+            $readable .= ' and after ' . $until->format('j M H:i') . ' (too far ahead)';
+        }
+        $footer = [
+            'Shown are the sessions set up in Acuity, booked or not.',
+            $readable . '.',
+            "'Hours unknown': no run has yet seen this day in full, so further hours may be missing.",
+            'Time a tutor has blocked off is not shown.',
+        ];
 
         $view = [
-            'season' => self::monthName($report->seasonStart) . ' – ' . self::monthName($report->seasonEnd),
-            'types' => implode(', ', array_map(
-                static fn (array $t): string => "{$t['name']} ({$t['duration']} min)",
-                $report->types,
-            )),
-            'timezone' => $report->timezone,
+            'season' => self::monthName($run['seasonStart'], $tz) . ' – ' . self::monthName($run['seasonEnd'], $tz),
+            'timezone' => SeasonAvailability::TIMEZONE,
             'generated' => $generated->format('j M Y H:i'),
             'footer' => $footer,
-            'warnings' => $report->warnings,
-            'json' => json_encode(self::data($report, $generated, $tz), JSON_HEX_TAG | JSON_HEX_AMP | JSON_THROW_ON_ERROR),
+            'warnings' => $run['warnings'],
+            'json' => json_encode(
+                self::data($store, $run, $generated, $tz, $include, $exclude),
+                JSON_HEX_TAG | JSON_HEX_AMP | JSON_THROW_ON_ERROR,
+            ),
         ];
 
         return self::template($view);
@@ -65,36 +76,65 @@ final class ReportRenderer
         return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
     }
 
-    /** @return array<string, mixed> what the page's script reads */
-    private static function data(Report $report, DateTimeImmutable $generated, DateTimeZone $tz): array
+    /**
+     * What the page's script reads.
+     *
+     * @param array<string, mixed> $store
+     * @param array<string, mixed> $run
+     * @param list<int> $include
+     * @param list<int> $exclude
+     * @return array<string, mixed>
+     */
+    private static function data(array $store, array $run, DateTimeImmutable $generated, DateTimeZone $tz, array $include, array $exclude): array
     {
         $months = [];
-        $end = (new DateTimeImmutable($report->seasonEnd . '-01', $tz))->modify('first day of next month');
-        for ($month = new DateTimeImmutable($report->seasonStart . '-01', $tz); $month < $end; $month = $month->modify('first day of next month')) {
+        $dates = [];
+        $end = (new DateTimeImmutable($run['seasonEnd'] . '-01', $tz))->modify('first day of next month');
+        for ($month = new DateTimeImmutable($run['seasonStart'] . '-01', $tz); $month < $end; $month = $month->modify('first day of next month')) {
             $months[] = $month->format('Y-m');
+        }
+        for ($day = new DateTimeImmutable($run['seasonStart'] . '-01', $tz); $day < $end; $day = $day->modify('+1 day')) {
+            $dates[] = $day->format('Y-m-d');
         }
 
         $tutors = [];
-        foreach ($report->tutors as $season) {
-            $days = [];
-            foreach ($season->days as $date => $day) {
-                // Days with nothing to show are left out to keep the page small.
-                if ($day->slots === [] && !$day->hoursUnknown) {
-                    continue;
-                }
-                $days[$date] = [
-                    'unknown' => $day->hoursUnknown,
-                    'slots' => array_map(static fn (Slot $slot): array => [
-                        'from' => $slot->start->format('H:i'),
-                        'to' => $slot->end->format('H:i'),
-                        'status' => $slot->status,
-                        'sessions' => count($slot->starts),
-                        'type' => $slot->typeName,
-                    ], $day->slots),
-                ];
+        foreach ($store['calendars'] as $id => $calendar) {
+            if (($include !== [] && !in_array($id, $include, true)) || in_array($id, $exclude, true)) {
+                continue;
             }
-            // An object even when empty, so the script can index it by date.
-            $tutors[] = ['id' => $season->tutor->id, 'name' => $season->tutor->name, 'days' => (object) $days];
+            $days = [];
+            foreach ($dates as $date) {
+                $entry = $calendar['days'][$date] ?? null;
+                // No entry, or one no run has seen whole: further hours may be missing.
+                $unknown = $entry === null || !($entry['complete'] ?? true);
+                $slots = array_map(
+                    static fn (string $hours): string => str_replace('-', '–', $hours),
+                    $entry['hours'] ?? [],
+                );
+                // Days with nothing to show are left out to keep the page small.
+                if ($slots !== [] || $unknown) {
+                    $days[$date] = ['unknown' => $unknown, 'slots' => $slots];
+                }
+            }
+
+            $reportedAt = $calendar['reportedAt'] ?? null;
+            $asOf = match (true) {
+                $reportedAt === null => 'an earlier run',
+                new DateTimeImmutable($reportedAt) < $generated => (new DateTimeImmutable($reportedAt))->setTimezone($tz)->format('j M Y H:i'),
+                default => null,
+            };
+
+            $tutors[] = [
+                'id' => $id,
+                'name' => $calendar['name'],
+                'asOf' => $asOf,
+                'types' => implode(', ', array_map(
+                    static fn (array $t): string => "{$t['name']} ({$t['duration']} min)",
+                    $calendar['types'] ?? [],
+                )),
+                // An object even when empty, so the script can index it by date.
+                'days' => (object) $days,
+            ];
         }
         usort($tutors, static fn (array $a, array $b): int => strnatcasecmp($a['name'], $b['name']));
 
@@ -105,14 +145,9 @@ final class ReportRenderer
         ];
     }
 
-    private static function monthName(string $month): string
+    private static function monthName(string $month, DateTimeZone $tz): string
     {
-        return (new DateTimeImmutable($month . '-01'))->format('F Y');
-    }
-
-    private static function shortTime(DateTimeImmutable $time, DateTimeZone $tz): string
-    {
-        return $time->setTimezone($tz)->format('j M H:i');
+        return (new DateTimeImmutable($month . '-01', $tz))->format('F Y');
     }
 
     /** @param array<string, mixed> $view */

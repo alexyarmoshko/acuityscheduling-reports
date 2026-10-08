@@ -7,7 +7,7 @@ declare(strict_types=1);
  * footer strings are escaped here; tutor data arrives as one JSON block that
  * the script reads and renders with textContent only.
  *
- * @var array{season: string, types: string, timezone: string, generated: string,
+ * @var array{season: string, timezone: string, generated: string,
  *            footer: list<string>, warnings: list<string>, json: string} $view
  */
 
@@ -25,13 +25,13 @@ $e = ReportRenderer::e(...);
 <style>
 :root {
   --bg: #ffffff; --fg: #1d2330; --muted: #5d6573; --line: #d9dde3; --panel: #f4f6f8;
-  --accent: #1f5fbf; --free-bg: #e3f4e6; --free-fg: #1b5e2a; --booked-bg: #fde9d7; --booked-fg: #8a3b00;
+  --accent: #1f5fbf; --slot-bg: #e3f4e6; --slot-fg: #1b5e2a; --warn: #8a3b00;
   --unknown-bg: repeating-linear-gradient(45deg, #f1f1f1, #f1f1f1 6px, #e6e6e6 6px, #e6e6e6 12px);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #15181e; --fg: #e6e9ee; --muted: #9aa3b1; --line: #343a45; --panel: #1d2129;
-    --accent: #7fb0ff; --free-bg: #173322; --free-fg: #9be2ae; --booked-bg: #3a2614; --booked-fg: #ffbf8a;
+    --accent: #7fb0ff; --slot-bg: #173322; --slot-fg: #9be2ae; --warn: #ffbf8a;
     --unknown-bg: repeating-linear-gradient(45deg, #23272f, #23272f 6px, #2b3039 6px, #2b3039 12px);
   }
 }
@@ -51,7 +51,11 @@ nav.tutors button[aria-current="true"] { background: var(--accent); color: var(-
 .tutor-select { display: none; width: 100%; padding: 8px; font: inherit; margin-bottom: 12px; }
 section.month { flex: 1; min-width: 0; }
 .month-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.month-bar h2 { font-size: 18px; margin: 0; flex: 1; }
+.month-bar .titles { flex: 1; min-width: 0; }
+.month-bar h2 { font-size: 18px; margin: 0; }
+.as-of { font-size: 13px; font-weight: 400; color: var(--muted); }
+.month-types { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+.no-tutors { padding: 16px 0; color: var(--muted); }
 .month-bar button { font: inherit; padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: inherit; cursor: pointer; }
 .month-bar button:disabled { opacity: .4; cursor: default; }
 .grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
@@ -64,13 +68,11 @@ section.month { flex: 1; min-width: 0; }
 .wd { display: none; }
 .slots { list-style: none; margin: 4px 0 0; padding: 0; }
 .slot { margin: 0 0 3px; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
-.slot.free { background: var(--free-bg); color: var(--free-fg); }
-.slot.booked { background: var(--booked-bg); color: var(--booked-fg); border-left: 3px solid currentColor; }
-.slot .label { font-weight: 600; }
+.slot { background: var(--slot-bg); color: var(--slot-fg); }
 .flag { font-size: 12px; font-style: italic; color: var(--muted); }
 footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 footer p { margin: 0 0 6px; }
-.warnings { color: var(--booked-fg); }
+.warnings { color: var(--warn); }
 @media (max-width: 760px) {
   main { display: block; padding: 12px 16px; }
   nav.tutors { display: none; }
@@ -93,7 +95,7 @@ footer p { margin: 0 0 6px; }
   <h1>Reconstructed availability</h1>
   <p class="meta">
     <span>Season: <?= $e($view['season']) ?></span>
-    <span>Types: <?= $e($view['types']) ?></span>
+
     <span>Time zone: <?= $e($view['timezone']) ?></span>
     <span>Generated: <?= $e($view['generated']) ?></span>
   </p>
@@ -104,7 +106,10 @@ footer p { margin: 0 0 6px; }
   <section class="month">
     <div class="month-bar">
       <button type="button" id="prev" aria-label="Previous month">&lsaquo; Prev</button>
-      <h2 id="month-title" aria-live="polite"></h2>
+      <div class="titles">
+        <h2 id="month-title" aria-live="polite"></h2>
+        <p class="month-types" id="month-types"></p>
+      </div>
       <button type="button" id="next" aria-label="Next month">Next &rsaquo;</button>
     </div>
     <div class="grid" id="grid"></div>
@@ -142,34 +147,24 @@ footer p { margin: 0 0 6px; }
 
   function pad(n) { return (n < 10 ? '0' : '') + n; }
 
-  function slotItem(slot) {
-    var item = el('li', 'slot ' + slot.status);
-    item.appendChild(el('span', 'time', slot.from + '–' + slot.to));
-    var label;
-    if (slot.status === 'free') {
-      // A merged range longer than one session shows its count: "· 2 free".
-      label = slot.sessions > 1 ? ' · ' + slot.sessions + ' free' : ' free';
-    } else {
-      label = ' booked';
-    }
-    item.appendChild(el('span', 'label', label));
-    if (slot.status === 'booked' && slot.type) {
-      item.appendChild(el('span', 'type', ' · ' + slot.type));
-    }
-    return item;
-  }
-
   function renderMonth() {
     var t = data.tutors[tutor];
     var parts = data.months[month].split('-');
     var year = Number(parts[0]);
     var m = Number(parts[1]);
-    document.getElementById('month-title').textContent = MONTHS[m - 1] + ' ' + year + (t ? ' · ' + t.name : '');
+    var title = document.getElementById('month-title');
+    title.textContent = MONTHS[m - 1] + ' ' + year + (t ? ' · ' + t.name : '');
+    if (t && t.asOf) { title.appendChild(el('span', 'as-of', ' (as of ' + t.asOf + ')')); }
+    document.getElementById('month-types').textContent = t ? t.types : '';
     document.getElementById('prev').disabled = month === 0;
     document.getElementById('next').disabled = month === data.months.length - 1;
 
     var grid = document.getElementById('grid');
     grid.textContent = '';
+    if (!t) {
+      grid.appendChild(el('p', 'no-tutors', 'No tutor calendars to show.'));
+      return;
+    }
     WEEKDAYS.forEach(function (name) { grid.appendChild(el('div', 'weekday', name)); });
 
     // Weekdays from UTC date arithmetic on the date keys: no time zone involved.
@@ -178,7 +173,7 @@ footer p { margin: 0 0 6px; }
     for (var i = 0; i < offset; i++) { grid.appendChild(el('div', 'cell blank')); }
     for (var d = 1; d <= length; d++) {
       var key = year + '-' + pad(m) + '-' + pad(d);
-      var day = t ? t.days[key] : undefined;
+      var day = t.days[key];
       var cell = el('div', 'cell');
       if (key < data.today) { cell.classList.add('past'); }
       if (!day) { cell.classList.add('empty'); }
@@ -192,7 +187,7 @@ footer p { margin: 0 0 6px; }
         }
         if (day.slots.length) {
           var list = el('ul', 'slots');
-          day.slots.forEach(function (slot) { list.appendChild(slotItem(slot)); });
+          day.slots.forEach(function (slot) { list.appendChild(el('li', 'slot', slot)); });
           cell.appendChild(list);
         }
       }

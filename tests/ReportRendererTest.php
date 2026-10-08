@@ -7,39 +7,72 @@ namespace AcuityReport\Tests;
 use AcuityReport\AcuityClient;
 use AcuityReport\Config;
 use AcuityReport\Credentials;
-use AcuityReport\Day;
-use AcuityReport\Report;
+use AcuityReport\RenderOnlyCommand;
 use AcuityReport\ReportCommand;
 use AcuityReport\ReportRenderer;
 use AcuityReport\SeasonAvailability;
-use AcuityReport\Slot;
 use AcuityReport\SnapshotStore;
-use AcuityReport\Tutor;
-use AcuityReport\TutorSeason;
 use DateTimeImmutable;
 use DateTimeZone;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 final class ReportRendererTest extends TestCase
 {
+    private const GENERATED = '2026-10-08T14:32:07+01:00';
+
+    private string $root;
+
+    protected function setUp(): void
+    {
+        $this->root = sys_get_temp_dir() . '/report-test-' . bin2hex(random_bytes(4));
+    }
+
+    protected function tearDown(): void
+    {
+        $this->remove($this->root);
+    }
+
+    private function remove(string $path): void
+    {
+        if (is_dir($path)) {
+            foreach (scandir($path) ?: [] as $name) {
+                if ($name !== '.' && $name !== '..') {
+                    $this->remove($path . '/' . $name);
+                }
+            }
+            rmdir($path);
+        } elseif (file_exists($path)) {
+            unlink($path);
+        }
+    }
+
     private static function at(string $time): DateTimeImmutable
     {
         return new DateTimeImmutable($time, new DateTimeZone('Europe/London'));
     }
 
-    private static function report(string $name = 'Tutor A', array $days = [], array $warnings = [], string $until = '2027-07-21 15:09'): Report
+    /** @return array<string, mixed> a store with one calendar and a lastRun */
+    private static function store(array $calendar = [], array $lastRun = []): array
     {
-        return new Report(
-            '2026-11',
-            '2027-03',
-            self::at('2026-10-08 14:32:07'),
-            'Europe/London',
-            [['id' => 42, 'name' => 'Lesson', 'duration' => 30]],
-            self::at('2026-10-09 09:32'),
-            self::at($until),
-            [new TutorSeason(new Tutor(7, $name), $days)],
-            $warnings,
-        );
+        return [
+            'version' => 1,
+            'lastRun' => $lastRun + [
+                'generatedAt' => self::GENERATED,
+                'seasonStart' => '2026-11',
+                'seasonEnd' => '2027-03',
+                'types' => [['id' => 42, 'name' => 'Lesson', 'duration' => 30]],
+                'bookableFrom' => '2026-10-09T09:32:07+01:00',
+                'bookableUntil' => '2027-07-21T15:09:07+01:00',
+                'warnings' => [],
+            ],
+            'calendars' => [7 => $calendar + [
+                'name' => 'Tutor A',
+                'reportedAt' => self::GENERATED,
+                'types' => [['id' => 42, 'name' => 'Lesson', 'duration' => 30]],
+                'days' => [],
+            ]],
+        ];
     }
 
     /** @return array<string, mixed> the decoded JSON data block */
@@ -53,17 +86,20 @@ final class ReportRendererTest extends TestCase
     public function testNameCannotBreakOutOfTheDataBlockAndRoundTrips(): void
     {
         $name = 'Evil </script><script>alert(1)</script> & "quotes" \'single\' <!--';
+        $store = self::store(['name' => $name, 'types' => [['id' => 42, 'name' => $name, 'duration' => 30]]], ['warnings' => ["Warning about {$name}"]]);
 
-        $html = ReportRenderer::render(self::report($name, warnings: ["Warning about {$name}"]));
+        $html = ReportRenderer::render($store);
 
         self::assertStringNotContainsString('<script>alert(1)', $html);
         self::assertSame(2, substr_count($html, '</script>'), 'only the data block and the page script close');
-        self::assertSame($name, self::data($html)['tutors'][0]['name']);
+        $tutor = self::data($html)['tutors'][0];
+        self::assertSame($name, $tutor['name']);
+        self::assertSame("{$name} (30 min)", $tutor['types']);
     }
 
     public function testNoExternalUrls(): void
     {
-        $html = ReportRenderer::render(self::report());
+        $html = ReportRenderer::render(self::store());
 
         self::assertDoesNotMatchRegularExpression('#(https?:)?//[a-z0-9]#i', $html);
         self::assertStringNotContainsString(' src=', $html);
@@ -72,81 +108,106 @@ final class ReportRendererTest extends TestCase
 
     public function testDefaultFileNameIsTimestamped(): void
     {
-        self::assertMatchesRegularExpression(
-            '/\Aavailability-\d{4}-\d{2}-\d{2}_\d{6}\.html\z/',
-            ReportRenderer::defaultFileName(self::at('2026-10-07 14:32:07')),
-        );
         self::assertSame('availability-2026-10-07_143207.html', ReportRenderer::defaultFileName(self::at('2026-10-07 14:32:07')));
     }
 
-    public function testFooterStatesTheSavedHoursRule(): void
+    public function testFooterSentences(): void
     {
-        $html = ReportRenderer::render(self::report());
+        $html = ReportRenderer::render(self::store());
 
-        self::assertStringContainsString('Hours before 9 Oct 09:32 that were too soon to read are filled in', $html);
-        self::assertStringNotContainsString('too far ahead to read are filled in', $html);
+        self::assertStringContainsString('Shown are the sessions set up in Acuity, booked or not.', $html);
+        self::assertStringContainsString('plus what earlier runs saw for the parts it could not: before 9 Oct 09:32 (too soon).', $html);
+        self::assertStringNotContainsString('too far ahead', $html);
+        self::assertStringContainsString('no run has yet seen this day in full', $html);
         self::assertStringContainsString('Time a tutor has blocked off is not shown.', $html);
     }
 
-    public function testFooterAddsTheHorizonSentenceWhenTheSeasonEndsAfterIt(): void
+    public function testFooterAddsTheHorizonWhenTheSeasonEndsAfterIt(): void
     {
-        $html = ReportRenderer::render(self::report(until: '2027-02-01 15:09'));
+        $html = ReportRenderer::render(self::store(lastRun: ['bookableUntil' => '2027-02-01T15:09:07+00:00']));
 
-        self::assertStringContainsString('Hours after 1 Feb 15:09 that were too far ahead to read are filled in the same way.', $html);
+        self::assertStringContainsString('before 9 Oct 09:32 (too soon) and after 1 Feb 15:09 (too far ahead).', $html);
     }
 
-    public function testDataHoldsPreformattedSlotsButNotStoredAt(): void
+    public function testHeaderShowsSeasonTimezoneAndGenerationTimeButNoTypes(): void
     {
-        $slots = [
-            new Slot(self::at('2026-11-02 21:30'), self::at('2026-11-02 22:30'), Slot::FREE, ['21:30' => Slot::STORED, '22:00' => Slot::LIVE]),
-            new Slot(self::at('2027-03-29 22:00'), self::at('2027-03-29 22:30'), Slot::BOOKED, ['22:00' => Slot::LIVE], 'Lesson'),
-        ];
-        $days = [
-            '2026-11-01' => new Day('2026-11-01', true, null, []),
-            '2026-11-02' => new Day('2026-11-02', false, '2026-10-05T12:00:00+01:00', [$slots[0]]),
-            '2026-11-03' => new Day('2026-11-03', false, null, []),
-            '2027-03-29' => new Day('2027-03-29', false, null, [$slots[1]]),
-        ];
-
-        $html = ReportRenderer::render(self::report(days: $days));
-        $data = self::data($html);
-
-        self::assertStringNotContainsString('2026-10-05T12:00', $html);
-        self::assertSame(['2026-11', '2026-12', '2027-01', '2027-02', '2027-03'], $data['months']);
-        self::assertSame('2026-10-08', $data['today']);
-        $tutorDays = $data['tutors'][0]['days'];
-        self::assertSame(['2026-11-01', '2026-11-02', '2027-03-29'], array_keys($tutorDays), 'empty days are left out');
-        self::assertSame(['unknown' => true, 'slots' => []], $tutorDays['2026-11-01']);
-        self::assertSame(
-            ['from' => '21:30', 'to' => '22:30', 'status' => 'free', 'sessions' => 2, 'type' => null],
-            $tutorDays['2026-11-02']['slots'][0],
-        );
-        // Local BST time after the clock change, not UTC.
-        self::assertSame('22:00', $tutorDays['2027-03-29']['slots'][0]['from']);
-    }
-
-    public function testHeaderShowsSeasonTypesTimezoneAndGenerationTime(): void
-    {
-        $html = ReportRenderer::render(self::report());
+        $html = ReportRenderer::render(self::store());
 
         self::assertStringContainsString('Reconstructed availability', $html);
         self::assertStringContainsString('November 2026 – March 2027', $html);
-        self::assertStringContainsString('Lesson (30 min)', $html);
         self::assertStringContainsString('Europe/London', $html);
         self::assertStringContainsString('8 Oct 2026 14:32', $html);
+        self::assertStringNotContainsString('Types:', $html);
+        self::assertSame('Lesson (30 min)', self::data($html)['tutors'][0]['types']);
     }
 
-    public function testTutorsAreSortedByName(): void
+    public function testDaysHoldTimesOnlyAndFlagMissingOrIncompleteDays(): void
     {
-        $report = self::report();
-        $report = new Report(
-            $report->seasonStart, $report->seasonEnd, $report->generatedAt, $report->timezone, $report->types,
-            $report->bookableFrom, $report->bookableUntil,
-            [new TutorSeason(new Tutor(2, 'zoe'), []), new TutorSeason(new Tutor(1, 'Adam'), [])],
-            [],
-        );
+        $days = [
+            '2026-11-02' => ['observedAt' => self::GENERATED, 'hours' => ['21:30-22:00', '21:30-22:30', '22:00-22:30'], 'complete' => true],
+            '2026-11-03' => ['observedAt' => self::GENERATED, 'hours' => [], 'complete' => true],
+            '2026-11-09' => ['observedAt' => self::GENERATED, 'hours' => ['22:00-22:30'], 'complete' => false],
+            '2026-11-16' => ['observedAt' => '2026-10-01T10:00:00+01:00', 'hours' => ['21:30-22:00']],
+        ];
+        $complete = [];
+        for ($d = self::at('2026-11-01'); $d < self::at('2027-04-01'); $d = $d->modify('+1 day')) {
+            $complete[$d->format('Y-m-d')] = ['observedAt' => self::GENERATED, 'hours' => [], 'complete' => true];
+        }
+        unset($complete['2026-11-04']); // never saved
 
-        self::assertSame(['Adam', 'zoe'], array_column(self::data(ReportRenderer::render($report))['tutors'], 'name'));
+        $html = ReportRenderer::render(self::store(['days' => $days + $complete]));
+        $tutorDays = self::data($html)['tutors'][0]['days'];
+
+        self::assertSame(['2026-11-02', '2026-11-04', '2026-11-09', '2026-11-16'], array_keys($tutorDays));
+        self::assertSame(['unknown' => false, 'slots' => ['21:30–22:00', '21:30–22:30', '22:00–22:30']], $tutorDays['2026-11-02']);
+        self::assertSame(['unknown' => true, 'slots' => []], $tutorDays['2026-11-04']);
+        self::assertSame(['unknown' => true, 'slots' => ['22:00–22:30']], $tutorDays['2026-11-09']);
+        self::assertSame(['unknown' => false, 'slots' => ['21:30–22:00']], $tutorDays['2026-11-16'], 'no complete key: complete');
+        self::assertStringNotContainsString('2026-10-01T10:00', $html);
+        self::assertStringNotContainsString('"status"', $html, 'slots carry no free/booked status');
+    }
+
+    public function testAsOfLabels(): void
+    {
+        $store = self::store();
+        $store['calendars'][8] = ['name' => 'Older', 'reportedAt' => '2026-10-01T10:00:00+01:00', 'days' => []];
+        $store['calendars'][9] = ['name' => 'Legacy', 'days' => []];
+
+        $tutors = array_column(self::data(ReportRenderer::render($store))['tutors'], 'asOf', 'name');
+
+        self::assertSame(['Legacy' => 'an earlier run', 'Older' => '1 Oct 2026 10:00', 'Tutor A' => null], $tutors);
+    }
+
+    public function testTutorsAreSortedAndFilteredByIncludeAndExclude(): void
+    {
+        $store = self::store();
+        $store['calendars'][8] = ['name' => 'zoe', 'reportedAt' => self::GENERATED, 'days' => []];
+        $store['calendars'][9] = ['name' => 'Adam', 'reportedAt' => self::GENERATED, 'days' => []];
+
+        $names = static fn (string $html): array => array_column(self::data($html)['tutors'], 'name');
+
+        self::assertSame(['Adam', 'Tutor A', 'zoe'], $names(ReportRenderer::render($store)));
+        self::assertSame(['Tutor A', 'zoe'], $names(ReportRenderer::render($store, [7, 8])));
+        self::assertSame(['Tutor A'], $names(ReportRenderer::render($store, [7, 8], [8])));
+    }
+
+    public function testNoCalendarsRendersTheEmptyMessage(): void
+    {
+        $store = self::store();
+        $store['calendars'] = [];
+
+        $html = ReportRenderer::render($store);
+
+        self::assertSame([], self::data($html)['tutors']);
+        self::assertStringContainsString('No tutor calendars to show.', $html);
+    }
+
+    public function testNoLastRunFails(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('No saved report yet');
+
+        ReportRenderer::render(SnapshotStore::empty());
     }
 
     public function testNoClientFieldsOrEmailsReachTheHtml(): void
@@ -158,59 +219,174 @@ final class ReportRendererTest extends TestCase
                 $rows = json_decode((string) file_get_contents(__DIR__ . '/fixtures/appointments.json'), true);
                 return array_values(array_filter($rows, static fn (array $r): bool => substr($r['datetime'], 0, 7) === substr($q['minDate'], 0, 7)));
             });
-        $client = new AcuityClient(new Credentials('1', 'k'), $transport, static fn (): float => 0.0, static function (float $s): void {
-        });
         $config = Config::fromArray([
             'season_start' => '2026-03', 'season_end' => '2026-03', 'appointment_type_ids' => [101],
             'min_notice_hours' => 18, 'max_days_ahead' => 287,
         ]);
 
-        [$report] = (new SeasonAvailability($client, $config, self::at('2026-10-08 12:00')))->build(SnapshotStore::empty());
-        $html = ReportRenderer::render($report);
+        [, $store] = (new SeasonAvailability($this->client($transport), $config, self::at('2026-10-08 12:00')))->build(SnapshotStore::empty());
+        $html = ReportRenderer::render($store);
 
         self::assertStringContainsString('Fixture Tutor', $html);
-        self::assertStringContainsString('"from":"21:30"', $html);
+        self::assertSame(['21:30' . mb_chr(0x2013) . '22:00'], self::data($html)['tutors'][0]['days']['2026-03-30']['slots']);
         foreach (['FIXTURE-CLIENT', 'FIXTURE-NOTES', '000-FIXTURE', 'example.invalid'] as $value) {
             self::assertStringNotContainsString($value, $html, $value);
         }
         self::assertDoesNotMatchRegularExpression('/[\w.+-]+@[\w-]+\.[\w.]+/', $html, 'no email address');
     }
 
-    public function testRunPublishesReportAndStoreOnFirstRun(): void
+    // --- Report run and --render-only ---
+
+    private function client(FakeTransport $transport): AcuityClient
     {
-        $root = sys_get_temp_dir() . '/report-run-' . bin2hex(random_bytes(4));
-        $transport = (new FakeTransport())
-            ->route('/calendars', [['id' => 7, 'name' => 'Tutor A']])
-            ->route('/appointment-types', [['id' => 42, 'name' => 'Lesson', 'duration' => 30, 'active' => true, 'type' => 'service', 'calendarIDs' => [7]]])
-            ->route('/availability/dates', static fn (array $q): array => $q['month'] === '2026-11' ? [['date' => '2026-11-02']] : [])
-            ->route('/availability/times', [['time' => '2026-11-02T21:30:00+0000']])
-            ->route('/appointments', []);
-        $client = new AcuityClient(new Credentials('1', 'k'), $transport, static fn (): float => 0.0, static function (float $s): void {
+        return new AcuityClient(new Credentials('1', 'k'), $transport, static fn (): float => 0.0, static function (float $s): void {
         });
-        $config = Config::fromArray([
+    }
+
+    private static function config(array $settings = []): Config
+    {
+        return Config::fromArray($settings + [
             'season_start' => '2026-11', 'season_end' => '2027-03', 'appointment_type_ids' => [42],
             'min_notice_hours' => 18, 'max_days_ahead' => 287,
         ]);
-        $runStart = self::at('2026-10-08 14:32:07');
+    }
+
+    /** A small fake API: calendars 7 and 8, type 42 offered on $offeredOn. */
+    private static function api(array $offeredOn = [7, 8], bool $active = true, array $calendars = [7 => 'Tutor A', 8 => 'Tutor B']): FakeTransport
+    {
+        return (new FakeTransport())
+            ->route('/calendars', array_map(static fn (int $id, string $name): array => ['id' => $id, 'name' => $name], array_keys($calendars), $calendars))
+            ->route('/appointment-types', [['id' => 42, 'name' => 'Lesson', 'duration' => 30, 'active' => $active, 'type' => 'service', 'calendarIDs' => $offeredOn]])
+            ->route('/availability/dates', static fn (array $q): array => $q['month'] === '2026-11' ? [['date' => '2026-11-02']] : [])
+            ->route('/availability/times', [['time' => '2026-11-02T21:30:00+0000']])
+            ->route('/appointments', []);
+    }
+
+    /** One report run; returns the console summary. */
+    private function runWith(FakeTransport $transport, array $settings = [], string $at = '2026-10-08 14:32:07', ?string $out = null): string
+    {
+        $runStart = self::at($at);
+
+        return ReportCommand::run(
+            $this->client($transport), self::config($settings), $this->root . '/data', $this->root . '/out', $out, $runStart,
+            static fn (): DateTimeImmutable => $runStart->modify('+2 minutes'),
+        );
+    }
+
+    /** First report run against the small fake API; returns its report path. */
+    private function reportRun(): string
+    {
+        $summary = $this->runWith(self::api());
+        $path = $this->root . '/out/availability-2026-10-08_143207.html';
+        self::assertStringContainsString("Report written to {$path}", $summary);
+
+        return $path;
+    }
+
+    public function testLastTutorWithdrawnPublishesAnEmptyReportAndPrunesTheStore(): void
+    {
+        $this->reportRun();
+
+        $summary = $this->runWith(self::api(offeredOn: []), out: $this->root . '/out/empty.html');
+
+        self::assertStringContainsString('Removed withdrawn calendar 7: Tutor A', $summary);
+        self::assertStringContainsString('Removed withdrawn calendar 8: Tutor B', $summary);
+        self::assertStringContainsString('Warning: No tutor calendars to show', $summary);
+        self::assertSame([], self::data((string) file_get_contents($this->root . '/out/empty.html'))['tutors']);
+        self::assertSame([], SnapshotStore::load($this->root . '/data')['calendars']);
+    }
+
+    public function testLimitedRunOfWithdrawnCalendarsPublishesAnEmptyReportAndKeepsOthers(): void
+    {
+        $this->reportRun();
+
+        // Calendar 8 deleted in Acuity; the run is limited to it.
+        $summary = $this->runWith(self::api(offeredOn: [7], calendars: [7 => 'Tutor A']), ['include_calendars' => [8]], out: $this->root . '/out/limited.html');
+
+        self::assertStringContainsString('Removed withdrawn calendar 8: Tutor B', $summary);
+        self::assertSame([], self::data((string) file_get_contents($this->root . '/out/limited.html'))['tutors']);
+        self::assertSame([7], array_keys(SnapshotStore::load($this->root . '/data')['calendars']));
+    }
+
+    public function testRunWithNoValidTypeLeavesBothFilesUnchanged(): void
+    {
+        $this->reportRun();
+        $storeFile = $this->root . '/data/' . SnapshotStore::FILE;
+        $before = (string) file_get_contents($storeFile);
+        $reports = scandir($this->root . '/out');
 
         try {
-            $summary = ReportCommand::run($client, $config, $root . '/data', $root . '/out', null, $runStart, static fn (): DateTimeImmutable => $runStart->modify('+2 minutes'));
-
-            $report = $root . '/out/availability-2026-10-08_143207.html';
-            self::assertFileExists($report);
-            self::assertStringContainsString("Report written to {$report}", $summary);
-            self::assertFileDoesNotExist($root . '/data/' . SnapshotStore::FILE . '.bak');
-            $store = SnapshotStore::load($root . '/data');
-            self::assertSame(['21:30-22:00'], $store['calendars'][7]['days']['2026-11-02']['hours']);
-            // The lock was released: a second run can start.
-            fclose(SnapshotStore::lock($root . '/data'));
-        } finally {
-            foreach (['/out/availability-2026-10-08_143207.html', '/data/' . SnapshotStore::FILE, '/data/.lock'] as $file) {
-                @unlink($root . $file);
-            }
-            @rmdir($root . '/out');
-            @rmdir($root . '/data');
-            @rmdir($root);
+            $this->runWith(self::api(active: false), at: '2026-10-09 10:00');
+            self::fail('Expected exception');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('None of appointment_type_ids is a valid appointment type', $e->getMessage());
         }
+        self::assertSame($before, file_get_contents($storeFile));
+        self::assertSame($reports, scandir($this->root . '/out'));
+        self::assertFileDoesNotExist($storeFile . '.bak');
+    }
+
+    public function testReportRunPublishesReportAndStoreOnFirstRun(): void
+    {
+        $path = $this->reportRun();
+
+        self::assertFileExists($path);
+        self::assertFileDoesNotExist($this->root . '/data/' . SnapshotStore::FILE . '.bak');
+        $store = SnapshotStore::load($this->root . '/data');
+        self::assertSame(['21:30-22:00'], $store['calendars'][7]['days']['2026-11-02']['hours']);
+        self::assertSame('2026-10-08T14:32:07+01:00', $store['lastRun']['generatedAt']);
+        fclose(SnapshotStore::lock($this->root . '/data')); // the lock was released
+    }
+
+    public function testRenderOnlyGivesTheSamePageAndLeavesTheStoreAlone(): void
+    {
+        $reportPath = $this->reportRun();
+        $storeFile = $this->root . '/data/' . SnapshotStore::FILE;
+        $storeBefore = (string) file_get_contents($storeFile);
+
+        $summary = RenderOnlyCommand::run(self::config(), $this->root . '/data', $this->root . '/out', null, self::at('2026-10-09 10:00:00'));
+
+        $renderPath = $this->root . '/out/availability-2026-10-09_100000.html';
+        self::assertStringContainsString("Report written to {$renderPath}", $summary);
+        self::assertSame(file_get_contents($reportPath), file_get_contents($renderPath));
+        self::assertSame($storeBefore, file_get_contents($storeFile));
+        self::assertFileDoesNotExist($storeFile . '.bak');
+    }
+
+    public function testRenderOnlyUsesTheLastRunSeasonAndCurrentFilters(): void
+    {
+        $this->reportRun();
+
+        RenderOnlyCommand::run(
+            self::config(['season_start' => '2027-11', 'season_end' => '2028-03', 'exclude_calendars' => [8]]),
+            $this->root . '/data', $this->root . '/out', $this->root . '/out/x.html', self::at('2026-10-09 10:00'),
+        );
+
+        $data = self::data((string) file_get_contents($this->root . '/out/x.html'));
+        self::assertSame('2026-11', $data['months'][0]);
+        self::assertSame(['Tutor A'], array_column($data['tutors'], 'name'));
+    }
+
+    public function testRenderOnlyFailsWhileARunHoldsTheLock(): void
+    {
+        $this->reportRun();
+        $lock = SnapshotStore::lock($this->root . '/data');
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('Another run');
+
+            RenderOnlyCommand::run(self::config(), $this->root . '/data', $this->root . '/out', null, self::at('2026-10-09 10:00'));
+        } finally {
+            fclose($lock);
+        }
+    }
+
+    public function testRenderOnlyWithoutASavedRunFails(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('No saved report yet');
+
+        RenderOnlyCommand::run(self::config(), $this->root . '/data', $this->root . '/out', null, self::at('2026-10-09 10:00'));
     }
 }

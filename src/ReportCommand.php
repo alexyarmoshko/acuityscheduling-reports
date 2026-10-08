@@ -8,13 +8,13 @@ use Closure;
 use DateTimeImmutable;
 
 /**
- * The default run: build the report and publish it with the updated snapshot
- * store (plan: "Snapshot store", one run at a time and publication).
+ * The default run: update the saved days from the API, render the page from
+ * the updated store, and publish both (plan: "Snapshot store", step 5).
  */
 final class ReportCommand
 {
     /**
-     * @param string|null $out report path; null for out/<default name> under $outDir
+     * @param string|null $out report path; null for <default name> under $outDir
      * @param (Closure(): DateTimeImmutable)|null $now clock read just before publication
      * @param (Closure(string): void)|null $progress
      * @return string summary for the console, including any warnings
@@ -35,7 +35,8 @@ final class ReportCommand
         try {
             $store = SnapshotStore::load($dataDir);
             [$report, $newStore] = (new SeasonAvailability($client, $config, $runStart, $progress))->build($store);
-            $html = ReportRenderer::render($report);
+            // The same path as --render-only: the page comes from the store.
+            $html = ReportRenderer::render($newStore, $config->includeCalendars, $config->excludeCalendars);
             SnapshotStore::publish($path, $html, $dataDir, $newStore, $runStart, $now !== null ? $now() : new DateTimeImmutable());
         } finally {
             fclose($lock);
@@ -44,6 +45,9 @@ final class ReportCommand
         $summary = '';
         foreach ($report->warnings as $warning) {
             $summary .= "Warning: {$warning}\n";
+        }
+        foreach ($report->removed as $calendar) {
+            $summary .= "Removed withdrawn calendar {$calendar['id']}: {$calendar['name']}\n";
         }
 
         return $summary . sprintf(

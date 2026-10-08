@@ -6,13 +6,17 @@ namespace AcuityReport;
 
 use DateTimeImmutable;
 
-/** Everything the report page shows. */
+/**
+ * What one run built: the reported calendars' days, for --debug-tutor and the
+ * console. The page itself is rendered from the saved store (plan step 5).
+ */
 final class Report
 {
     /**
      * @param list<array{id: int, name: string, duration: int}> $types
      * @param list<TutorSeason> $tutors
      * @param list<string> $warnings
+     * @param list<array{id: int, name: string}> $removed withdrawn calendars removed from the store
      */
     public function __construct(
         public readonly string $seasonStart,
@@ -24,6 +28,7 @@ final class Report
         public readonly DateTimeImmutable $bookableUntil,
         public readonly array $tutors,
         public readonly array $warnings,
+        public readonly array $removed = [],
     ) {
     }
 }

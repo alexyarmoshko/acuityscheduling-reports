@@ -85,11 +85,14 @@ final class SnapshotStore
     /** Checks the whole version-1 structure; throws a RuntimeException naming the first problem. */
     public static function validate(mixed $data): void
     {
-        if (!is_array($data) || !self::hasKeys($data, ['calendars', 'version'])) {
-            throw new RuntimeException('expected exactly the keys version and calendars');
+        if (!is_array($data) || !self::hasKeys($data, ['calendars', 'version'], ['lastRun'])) {
+            throw new RuntimeException('expected the keys version and calendars, and optionally lastRun');
         }
         if ($data['version'] !== self::VERSION) {
             throw new RuntimeException('unknown version');
+        }
+        if (array_key_exists('lastRun', $data)) {
+            self::validateLastRun($data['lastRun']);
         }
         if (!is_array($data['calendars'])) {
             throw new RuntimeException('calendars must be an object');
@@ -98,20 +101,29 @@ final class SnapshotStore
             if (!is_int($id) || $id <= 0) {
                 throw new RuntimeException('a calendar ID is not a positive integer');
             }
-            if (!is_array($calendar) || !self::hasKeys($calendar, ['days', 'name'])
+            if (!is_array($calendar) || !self::hasKeys($calendar, ['days', 'name'], ['reportedAt', 'types'])
                 || !is_string($calendar['name']) || !is_array($calendar['days'])) {
-                throw new RuntimeException("calendar {$id}: expected exactly name and days");
+                throw new RuntimeException("calendar {$id}: expected name and days, and optionally reportedAt and types");
+            }
+            if (array_key_exists('reportedAt', $calendar) && (!is_string($calendar['reportedAt']) || !self::isTimestamp($calendar['reportedAt']))) {
+                throw new RuntimeException("calendar {$id}: reportedAt is not an ISO 8601 time");
+            }
+            if (array_key_exists('types', $calendar)) {
+                self::validateTypes($calendar['types'], "calendar {$id}");
             }
             foreach ($calendar['days'] as $date => $entry) {
                 if (!is_string($date) || !self::isDate($date)) {
                     throw new RuntimeException("calendar {$id}: a date key is not YYYY-MM-DD");
                 }
                 $where = "calendar {$id}, {$date}";
-                if (!is_array($entry) || !self::hasKeys($entry, ['hours', 'observedAt'])) {
-                    throw new RuntimeException("{$where}: expected exactly observedAt and hours");
+                if (!is_array($entry) || !self::hasKeys($entry, ['hours', 'observedAt'], ['complete'])) {
+                    throw new RuntimeException("{$where}: expected observedAt and hours, and optionally complete");
                 }
                 if (!is_string($entry['observedAt']) || !self::isTimestamp($entry['observedAt'])) {
                     throw new RuntimeException("{$where}: observedAt is not an ISO 8601 time");
+                }
+                if (array_key_exists('complete', $entry) && !is_bool($entry['complete'])) {
+                    throw new RuntimeException("{$where}: complete must be true or false");
                 }
                 if (!is_array($entry['hours']) || !array_is_list($entry['hours'])) {
                     throw new RuntimeException("{$where}: hours must be a list");
@@ -131,6 +143,47 @@ final class SnapshotStore
                     }
                     $previous = $hours;
                 }
+            }
+        }
+    }
+
+    private static function validateLastRun(mixed $lastRun): void
+    {
+        $keys = ['bookableFrom', 'bookableUntil', 'generatedAt', 'seasonEnd', 'seasonStart', 'types', 'warnings'];
+        if (!is_array($lastRun) || !self::hasKeys($lastRun, $keys)) {
+            throw new RuntimeException('lastRun: expected exactly ' . implode(', ', $keys));
+        }
+        foreach (['generatedAt', 'bookableFrom', 'bookableUntil'] as $key) {
+            if (!is_string($lastRun[$key]) || !self::isTimestamp($lastRun[$key])) {
+                throw new RuntimeException("lastRun: {$key} is not an ISO 8601 time");
+            }
+        }
+        foreach (['seasonStart', 'seasonEnd'] as $key) {
+            if (!is_string($lastRun[$key]) || preg_match('/\A\d{4}-(0[1-9]|1[0-2])\z/', $lastRun[$key]) !== 1) {
+                throw new RuntimeException("lastRun: {$key} is not YYYY-MM");
+            }
+        }
+        if ($lastRun['seasonStart'] > $lastRun['seasonEnd']) {
+            throw new RuntimeException('lastRun: seasonStart is after seasonEnd');
+        }
+        self::validateTypes($lastRun['types'], 'lastRun');
+        if (!is_array($lastRun['warnings']) || !array_is_list($lastRun['warnings'])
+            || array_filter($lastRun['warnings'], static fn (mixed $w): bool => !is_string($w)) !== []) {
+            throw new RuntimeException('lastRun: warnings must be a list of strings');
+        }
+    }
+
+    private static function validateTypes(mixed $types, string $where): void
+    {
+        if (!is_array($types) || !array_is_list($types)) {
+            throw new RuntimeException("{$where}: types must be a list");
+        }
+        foreach ($types as $type) {
+            if (!is_array($type) || !self::hasKeys($type, ['duration', 'id', 'name'])
+                || !is_int($type['id']) || $type['id'] <= 0
+                || !is_int($type['duration']) || $type['duration'] <= 0
+                || !is_string($type['name'])) {
+                throw new RuntimeException("{$where}: each type needs a positive integer id and duration, and a string name");
             }
         }
     }
@@ -161,16 +214,7 @@ final class SnapshotStore
             throw new RuntimeException('Internal error: the new snapshot store is invalid (' . $e->getMessage() . '). Nothing was written.');
         }
 
-        // The temp file sits next to the report, so the rename stays on one drive.
-        self::ensureDir(dirname($reportPath), 0777);
-        self::ensureDir($dir, 0700);
-        // A report written over the store would also end up in its .bak.
-        $reportDir = realpath(dirname($reportPath));
-        $storeDir = realpath($dir);
-        if ($reportDir === false || $storeDir === false
-            || (PHP_OS_FAMILY === 'Windows' ? strcasecmp($reportDir, $storeDir) === 0 : $reportDir === $storeDir)) {
-            throw new RuntimeException("The report cannot be written into {$dir}, which holds the snapshot store. Nothing was written.");
-        }
+        self::prepareReportDir($reportPath, $dir);
         $reportTemp = self::writeTemp(dirname($reportPath), basename($reportPath), $report);
         try {
             $storeTemp = self::writeTemp($dir, self::FILE, $json);
@@ -199,6 +243,20 @@ final class SnapshotStore
         }
     }
 
+    /**
+     * Writes the report only, never the store (--render-only): a temp file
+     * next to the report, then a rename.
+     */
+    public static function publishReport(string $reportPath, string $report, string $dir): void
+    {
+        self::prepareReportDir($reportPath, $dir);
+        $temp = self::writeTemp(dirname($reportPath), basename($reportPath), $report);
+        if (!@rename($temp, $reportPath)) {
+            @unlink($temp);
+            throw new RuntimeException("Cannot write the report to {$reportPath}. Nothing was changed.");
+        }
+    }
+
     /** @param array{version: int, calendars: array} $store */
     public static function encode(array $store): string
     {
@@ -209,13 +267,17 @@ final class SnapshotStore
             $days = $calendar['days'];
             ksort($days);
             // Objects, so that an empty map is written as {} rather than [].
-            $out[(string) $id] = ['name' => $calendar['name'], 'days' => (object) $days];
+            $out[(string) $id] = array_intersect_key($calendar, array_flip(['name', 'reportedAt', 'types']))
+                + ['days' => (object) $days];
         }
 
-        return json_encode(
-            ['version' => self::VERSION, 'calendars' => (object) $out],
-            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR,
-        ) . "\n";
+        $file = ['version' => self::VERSION];
+        if (array_key_exists('lastRun', $store)) {
+            $file['lastRun'] = $store['lastRun'];
+        }
+        $file['calendars'] = (object) $out;
+
+        return json_encode($file, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n";
     }
 
     public static function isDate(string $value): bool
@@ -235,12 +297,26 @@ final class SnapshotStore
      * @param array<mixed> $array
      * @param list<string> $keys sorted
      */
-    private static function hasKeys(array $array, array $keys): bool
+    private static function hasKeys(array $array, array $keys, array $optional = []): bool
     {
-        $actual = array_keys($array);
+        $actual = array_keys(array_diff_key($array, array_flip($optional)));
         sort($actual);
 
         return $actual === $keys;
+    }
+
+    private static function prepareReportDir(string $reportPath, string $dir): void
+    {
+        // The temp file sits next to the report, so the rename stays on one drive.
+        self::ensureDir(dirname($reportPath), 0777);
+        self::ensureDir($dir, 0700);
+        // A report written over the store would also end up in its .bak.
+        $reportDir = realpath(dirname($reportPath));
+        $storeDir = realpath($dir);
+        if ($reportDir === false || $storeDir === false
+            || (PHP_OS_FAMILY === 'Windows' ? strcasecmp($reportDir, $storeDir) === 0 : $reportDir === $storeDir)) {
+            throw new RuntimeException("The report cannot be written into {$dir}, which holds the snapshot store. Nothing was written.");
+        }
     }
 
     private static function ensureDir(string $dir, int $mode): void

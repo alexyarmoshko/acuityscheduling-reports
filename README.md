@@ -44,7 +44,8 @@ gives full read/write access to the Acuity account. This script only ever reads.
 
 ```bash
 php acuity-report.php --help
-php acuity-report.php            # writes out/availability-YYYY-MM-DD_HHMMSS.html
+php acuity-report.php                 # writes out/availability-YYYY-MM-DD_HHMMSS.html
+php acuity-report.php --render-only   # same page from the saved data, no API calls
 ```
 
 The script prints progress per calendar to the console. A run takes a couple of
@@ -54,11 +55,21 @@ any browser; it needs no network and can be shared as a file.
 | Option | Purpose |
 |---|---|
 | `--out=FILE` | Write the report to `FILE` (default `out/availability-YYYY-MM-DD_HHMMSS.html`, from the run's local time, so every run keeps its own report) |
+| `--render-only` | Write the report from `data/availability-cache.json` only: no API calls, no `.env` needed, and the saved data is not changed. Useful when changing the page layout |
 | `--list` | List calendars and appointment types with their IDs |
-| `--debug-tutor=ID` | Print free and booked starts per date for one calendar, each marked `live` or `stored <time>`. Writes nothing |
+| `--debug-tutor=ID` | Print the slots per date for one calendar, each free or booked and marked `live` or `stored <time>`. Writes nothing |
 | `--spike` | Save sample API responses to `spike/` (development) |
 
+`include_calendars` and `exclude_calendars` in `config.php` choose the
+calendars to report: an empty `include_calendars` means all calendars offering
+a listed appointment type, and `exclude_calendars` is applied after it. A run
+limited this way leaves the other calendars' saved data as it was.
+
 ## How availability is shown
+
+The report shows the sessions set up in each calendar, booked or not, as one
+item per session time. Under each month title it lists the appointment types
+that calendar offers.
 
 The Acuity API does not expose a calendar's configured hours. The report rebuilds
 them from two sources:
@@ -68,33 +79,33 @@ them from two sources:
 
 Free slots exist only inside the booking window (after the minimum notice and
 before the maximum booking horizon set in `config.php`). So each report run
-saves, for every day that lies wholly inside that window, that day's hours
-(free plus booked) to `data/availability-cache.json`. Later runs fill in the
-hours the API no longer shows, such as past days, from these saved hours.
-Anything the current run reads from the API takes priority.
+saves every day's sessions to `data/availability-cache.json`, cumulatively:
 
-As a result:
+- what the API shows now replaces the saved sessions for that part of the day,
+  including sessions that have been removed;
+- what it can no longer show, such as past days, is kept from earlier runs. A
+  cancelled booking does not remove a session.
 
-- A past day shows the hours of the last run that saw it in full. Its bookings
-  always come from the current run, so a cancelled session shows as free.
-- A day that could not be read in full, and that no earlier run saw in full, is
-  marked **hours unknown**. Its bookings and any free slots are shown, but
-  further hours may be missing.
+A day that no run has yet seen in full is marked **hours unknown**: the sessions
+shown were seen, but further ones may be missing. Blocked-off time, and slots
+hidden by Acuity settings such as resources or scheduling limits, do not
+appear.
 
 **Make the first run before the season starts:** at least the minimum notice
 plus one hour before the season's first day begins (with 18 hours' notice, by
-05:00 the day before). That run saves every season day in full, provided the
+05:00 the day before). That run sees every season day in full, provided the
 season also ends at least one day inside the maximum booking horizon (the
-script warns when it does not). Regular runs after that keep the saved hours
+script warns when it does not). Regular runs after that keep the saved data
 current.
-- Blocked-off time, and slots hidden by Acuity settings such as resources or
-  scheduling limits, do not appear.
+
+A calendar that no longer exists, or no longer offers any listed appointment
+type, is removed from the saved data and the report; the console lists it. A
+run limited by `include_calendars` checks only those calendars.
 
 The `data/` directory holds history the API cannot return again: back it up.
-Each run keeps the previous store as `availability-cache.json.bak`. If the main
+Each run keeps the previous file as `availability-cache.json.bak`. If the main
 file goes missing while the `.bak` exists, the script stops and asks you to
 restore it. Only one run at a time can use `data/`.
-
 ## Tests
 
 ```bash

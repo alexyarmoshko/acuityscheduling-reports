@@ -7,8 +7,9 @@ namespace AcuityReport;
 use DateTimeImmutable;
 
 /**
- * A booked session, or a range of merged free slots, on one local date.
- * Times are in Europe/London.
+ * One configured slot on one local date, never merged with others. Times are
+ * in Europe/London. Status and source are kept for --debug-tutor; the report
+ * page shows the time only.
  */
 final class Slot
 {
@@ -18,16 +19,11 @@ final class Slot
     public const LIVE = 'live';
     public const STORED = 'stored';
 
-    /**
-     * @param array<string, string> $starts offered start times (HH:MM, in order)
-     *        => source: Slot::LIVE (from this run) or Slot::STORED (snapshot store)
-     */
     public function __construct(
         public readonly DateTimeImmutable $start,
         public readonly DateTimeImmutable $end,
         public readonly string $status,
-        public readonly array $starts,
-        public readonly ?string $typeName = null,
+        public readonly string $source,
     ) {
     }
 }

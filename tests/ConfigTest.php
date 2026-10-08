@@ -117,6 +117,19 @@ final class ConfigTest extends TestCase
         Config::fromArray($values);
     }
 
+    public function testIncludeCalendarsIsOptionalAndValidated(): void
+    {
+        $values = self::valid();
+        self::assertSame([], Config::fromArray($values)->includeCalendars);
+
+        $values['include_calendars'] = [7, 8, 7];
+        self::assertSame([7, 8], Config::fromArray($values)->includeCalendars);
+
+        $values['include_calendars'] = ['7'];
+        $this->expectException(RuntimeException::class);
+        Config::fromArray($values);
+    }
+
     public function testRemovedSessionWindowIsNamedAsUnknown(): void
     {
         $values = self::valid();
