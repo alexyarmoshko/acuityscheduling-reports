@@ -19,10 +19,6 @@ return [
     // ...or more than this many days ahead.
     'max_days_ahead' => 90,
 
-    // Earliest session start and latest session end on any day (HH:MM, local
-    // time). Used to decide when a day lies partly outside the booking window.
-    'session_window' => ['09:00', '17:00'],
-
     // Calendar IDs to leave out of the report.
     'exclude_calendars' => [],
 ];
