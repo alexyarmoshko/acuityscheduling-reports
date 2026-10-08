@@ -321,6 +321,19 @@ final class SeasonAvailabilityTest extends TestCase
         self::assertSame(['22:00-22:30 free live'], self::slots(self::day($report, '2026-11-02')));
     }
 
+    public function testSlotSpanningTheClockChangeIsLeftOutWithAWarning(): void
+    {
+        // 25 Oct 2026: 01:30 BST + 30 minutes is 01:00 GMT.
+        $this->free('2026-10-25T00:30:00+0000');
+        $this->free('2026-10-25T20:00:00+0000');
+
+        [$report, $after] = $this->build('2026-10-20 12:00', settings: ['season_start' => '2026-10']);
+
+        self::assertSame(['observedAt' => '2026-10-20T12:00:00+01:00', 'hours' => ['20:00-20:30'], 'complete' => true], $after['calendars'][7]['days']['2026-10-25']);
+        self::assertStringContainsString('2026-10-25: a slot spans the clock change', implode("\n", $report->warnings));
+        SnapshotStore::validate(json_decode(SnapshotStore::encode($after), true));
+    }
+
     public function testDatesOutsideTheSeasonAndExcludedTutorsAreKept(): void
     {
         $this->calendars[] = ['id' => 8, 'name' => 'Tutor B'];
@@ -481,7 +494,7 @@ final class SeasonAvailabilityTest extends TestCase
         $this->types[0]['active'] = false;
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('None of appointment_type_ids is a valid appointment type');
+        $this->expectExceptionMessage('None of appointment_type_ids is a valid appointment type: nothing was written. Appointment type 42 left out: not active');
 
         $this->build();
     }

@@ -3,12 +3,11 @@
 A command-line PHP script that reads calendar availability from the
 [Acuity Scheduling API](https://developers.acuityscheduling.com/) and writes a
 single self-contained HTML page: calendars listed on the left, and a month view
-on the right showing each day's free and booked slots, with previous/next month
+on the right showing each day's sessions, booked or not, with previous/next month
 navigation. The page has no external dependencies, so it works offline and can be
 shared as a file.
 
-> **Status:** in development. All commands work against the API; the report
-> page is awaiting review.
+> **Status:** complete, in final review. All commands work against the API.
 
 ## Requirements
 
@@ -58,12 +57,12 @@ any browser; it needs no network and can be shared as a file.
 | `--render-only` | Write the report from `data/availability-cache.json` only: no API calls, no `.env` needed, and the saved data is not changed. Useful when changing the page layout |
 | `--list` | List calendars and appointment types with their IDs |
 | `--debug-tutor=ID` | Print the slots per date for one calendar, each free or booked and marked `live` or `stored <time>`. Writes nothing |
-| `--spike` | Save sample API responses to `spike/` (development) |
 
 `include_calendars` and `exclude_calendars` in `config.php` choose the
 calendars to report: an empty `include_calendars` means all calendars offering
 a listed appointment type, and `exclude_calendars` is applied after it. A run
-limited this way leaves the other calendars' saved data as it was.
+leaves the saved data of calendars it does not report as it was, unless the
+calendar was withdrawn (see below).
 
 ## How availability is shown
 
@@ -100,12 +99,15 @@ current.
 
 A calendar that no longer exists, or no longer offers any listed appointment
 type, is removed from the saved data and the report; the console lists it. A
-run limited by `include_calendars` checks only those calendars.
+run limited by `include_calendars` checks only those calendars. Excluding a
+calendar does not protect its saved data: a withdrawn calendar is removed even
+when it is in `exclude_calendars`.
 
 The `data/` directory holds history the API cannot return again: back it up.
 Each run keeps the previous file as `availability-cache.json.bak`. If the main
 file goes missing while the `.bak` exists, the script stops and asks you to
 restore it. Only one run at a time can use `data/`.
+
 ## Tests
 
 ```bash

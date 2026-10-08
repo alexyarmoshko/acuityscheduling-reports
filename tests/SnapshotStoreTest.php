@@ -86,6 +86,7 @@ final class SnapshotStoreTest extends TestCase
 
         self::assertSame($first, file_get_contents($this->main . '.bak'));
         self::assertSame(self::store(), SnapshotStore::load($this->data));
+        self::assertSame([], $this->tempFiles($this->data));
     }
 
     public function testRunOverFiftyMinutesWritesNothing(): void
@@ -134,7 +135,7 @@ final class SnapshotStoreTest extends TestCase
     {
         $this->publish(self::store(['21:30-22:00']));
         $before = (string) file_get_contents($this->main);
-        mkdir($this->main . '.bak'); // copy() onto a directory fails
+        mkdir($this->main . '.bak'); // renaming the backup onto a directory fails
 
         try {
             $this->publish(self::store(), $this->root . '/out/second.html');

@@ -276,6 +276,47 @@ final class ReportRendererTest extends TestCase
         return $path;
     }
 
+    public function testFailedPublishStillPrintsTheWarnings(): void
+    {
+        $runStart = self::at('2026-10-08 14:32:07');
+        $printed = [];
+
+        try {
+            ReportCommand::run(
+                $this->client(self::api()), self::config(['include_calendars' => [7, 99]]), $this->root . '/data', $this->root . '/out', null, $runStart,
+                static fn (): DateTimeImmutable => $runStart->modify('+51 minutes'),
+                static function (string $message) use (&$printed): void {
+                    $printed[] = $message;
+                },
+            );
+            self::fail('Expected exception');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('50 minutes', $e->getMessage());
+        }
+        self::assertContains('Warning: Calendar 99 in include_calendars is not a tutor calendar (not found, or offers none of the listed types)', $printed);
+    }
+
+    public function testFailedRetrievalStillPrintsTheWarningsSoFar(): void
+    {
+        $runStart = self::at('2026-10-08 14:32:07');
+        $printed = [];
+
+        try {
+            ReportCommand::run(
+                $this->client(self::api()->route('/appointments', ['message' => 'boom'], 400)), self::config(['include_calendars' => [7, 99]]),
+                $this->root . '/data', $this->root . '/out', null, $runStart, null,
+                static function (string $message) use (&$printed): void {
+                    $printed[] = $message;
+                },
+            );
+            self::fail('Expected exception');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('HTTP 400', $e->getMessage());
+        }
+        self::assertContains('Warning: Calendar 99 in include_calendars is not a tutor calendar (not found, or offers none of the listed types)', $printed);
+        self::assertFileDoesNotExist($this->root . '/data/' . SnapshotStore::FILE);
+    }
+
     public function testLastTutorWithdrawnPublishesAnEmptyReportAndPrunesTheStore(): void
     {
         $this->reportRun();

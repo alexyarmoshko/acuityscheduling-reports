@@ -9,15 +9,18 @@ use JsonException;
 use RuntimeException;
 
 /**
- * The snapshot store: the hours each calendar had on each fully observed date,
- * kept in data/availability-cache.json (plan: "Snapshot store").
+ * The snapshot store: each calendar's configured slots per date, kept
+ * cumulatively in data/availability-cache.json (plan: "Snapshot store", step 5).
  *
- * Shape: {"version": 1, "calendars": {"<id>": {"name": "...", "days":
- * {"YYYY-MM-DD": {"observedAt": "<ISO 8601>", "hours": ["HH:MM-HH:MM", ...]}}}}}.
- * Each entry describes a whole date. `hours` holds one local interval per slot
- * seen (free or booked), sorted by start then end, without duplicates and
- * never merged, so overlapping slots of different durations stay apart. `[]`
- * records that no hours were seen.
+ * Shape: {"version": 1, "lastRun": {...}, "calendars": {"<id>": {"name": "...",
+ * "reportedAt": "<ISO 8601>", "types": [{"id", "name", "duration"}], "days":
+ * {"YYYY-MM-DD": {"observedAt": "<ISO 8601>", "hours": ["HH:MM-HH:MM", ...],
+ * "complete": true}}}}}. `lastRun` holds the page header (validateLastRun()
+ * lists its keys); `reportedAt`, `types` and `complete` are optional on load.
+ * `complete` is false until a run has seen the whole date. `hours` holds one
+ * local interval per slot seen (free or booked), sorted by start then end,
+ * without duplicates and never merged, so overlapping slots of different
+ * durations stay apart. `[]` records that no hours were seen.
  */
 final class SnapshotStore
 {
@@ -27,7 +30,7 @@ final class SnapshotStore
     private const MAX_RUN_SECONDS = 50 * 60;
     private const HOURS = '/\A(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d\z/';
 
-    /** @return array{version: int, calendars: array<int, array{name: string, days: array<string, array{observedAt: string, hours: list<string>}>}>} */
+    /** @return array{version: int, lastRun?: array<string, mixed>, calendars: array<int, array{name: string, reportedAt?: string, types?: list<array{id: int, name: string, duration: int}>, days: array<string, array{observedAt: string, hours: list<string>, complete?: bool}>}>} */
     public static function empty(): array
     {
         return ['version' => self::VERSION, 'calendars' => []];
@@ -54,7 +57,7 @@ final class SnapshotStore
         return $handle;
     }
 
-    /** @return array{version: int, calendars: array<int, array{name: string, days: array<string, array{observedAt: string, hours: list<string>}>}>} */
+    /** @return array{version: int, lastRun?: array<string, mixed>, calendars: array<int, array{name: string, reportedAt?: string, types?: list<array{id: int, name: string, duration: int}>, days: array<string, array{observedAt: string, hours: list<string>, complete?: bool}>}>} */
     public static function load(string $dir): array
     {
         $main = $dir . '/' . self::FILE;
@@ -78,7 +81,7 @@ final class SnapshotStore
             throw new RuntimeException("Snapshot store {$main} is invalid ({$reason}). Fix it or restore {$bak}; nothing was written.");
         }
 
-        /** @var array{version: int, calendars: array<int, array{name: string, days: array<string, array{observedAt: string, hours: list<string>}>}>} $data */
+        /** @var array{version: int, lastRun?: array<string, mixed>, calendars: array<int, array{name: string, reportedAt?: string, types?: list<array{id: int, name: string, duration: int}>, days: array<string, array{observedAt: string, hours: list<string>, complete?: bool}>}>} $data */
         return $data;
     }
 
@@ -232,7 +235,7 @@ final class SnapshotStore
         $main = $dir . '/' . self::FILE;
         $failure = null;
         // The main file is copied, never moved, so it always exists.
-        if (is_file($main) && !@copy($main, $main . '.bak')) {
+        if (is_file($main) && !self::backup($main)) {
             $failure = "cannot copy it to {$main}.bak";
         } elseif (!@rename($storeTemp, $main)) {
             $failure = "cannot replace {$main}";
@@ -324,6 +327,29 @@ final class SnapshotStore
         if (!is_dir($dir) && !@mkdir($dir, $mode, true) && !is_dir($dir)) {
             throw new RuntimeException("Cannot create directory {$dir}. Nothing was written.");
         }
+    }
+
+    /**
+     * Copies $main to $main.bak through a temp file and a rename, so a failed
+     * copy leaves the previous .bak whole.
+     */
+    private static function backup(string $main): bool
+    {
+        $contents = @file_get_contents($main);
+        if ($contents === false) {
+            return false;
+        }
+        try {
+            $temp = self::writeTemp(dirname($main), basename($main) . '.bak', $contents);
+        } catch (RuntimeException) {
+            return false;
+        }
+        if (!@rename($temp, $main . '.bak')) {
+            @unlink($temp);
+            return false;
+        }
+
+        return true;
     }
 
     private static function writeTemp(string $dir, string $name, string $contents): string

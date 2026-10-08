@@ -6,6 +6,7 @@ namespace AcuityReport;
 
 use Closure;
 use DateTimeImmutable;
+use RuntimeException;
 
 /**
  * The default run: update the saved days from the API, render the page from
@@ -31,13 +32,23 @@ final class ReportCommand
     ): string {
         $path = $out ?? $outDir . '/' . ReportRenderer::defaultFileName($runStart);
 
+        $availability = new SeasonAvailability($client, $config, $runStart, $progress);
         $lock = SnapshotStore::lock($dataDir);
         try {
             $store = SnapshotStore::load($dataDir);
-            [$report, $newStore] = (new SeasonAvailability($client, $config, $runStart, $progress))->build($store);
+            [$report, $newStore] = $availability->build($store);
             // The same path as --render-only: the page comes from the store.
             $html = ReportRenderer::render($newStore, $config->includeCalendars, $config->excludeCalendars);
             SnapshotStore::publish($path, $html, $dataDir, $newStore, $runStart, $now !== null ? $now() : new DateTimeImmutable());
+        } catch (RuntimeException $e) {
+            // The page does not list warnings, so print those found so far
+            // before the error.
+            if ($progress !== null) {
+                foreach ($availability->warnings() as $warning) {
+                    ($progress)("Warning: {$warning}");
+                }
+            }
+            throw $e;
         } finally {
             fclose($lock);
         }

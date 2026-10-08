@@ -20,7 +20,8 @@ return [
     'max_days_ahead' => 90,
 
     // Calendar IDs to report on; empty means all calendars offering a listed
-    // type. Calendars a run does not report keep their saved data.
+    // type. Calendars a run does not report keep their saved data, unless
+    // they were withdrawn (deleted, or no longer offering a listed type).
     'include_calendars' => [],
 
     // Calendar IDs to leave out of the report (applied after include_calendars).

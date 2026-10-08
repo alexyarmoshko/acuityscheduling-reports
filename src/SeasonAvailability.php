@@ -63,7 +63,9 @@ final class SeasonAvailability
         $this->warnings = [];
         $types = $this->validTypes();
         if ($types === []) {
-            throw new RuntimeException('None of appointment_type_ids is a valid appointment type (see the warnings above): nothing was written');
+            // Nothing has been printed yet, so the reasons go in the message.
+            throw new RuntimeException('None of appointment_type_ids is a valid appointment type: nothing was written. '
+                . implode('; ', $this->warnings));
         }
         [$names, $tutorTypes] = $this->calendars($types);
 
@@ -164,6 +166,12 @@ final class SeasonAvailability
         );
 
         return [$report, $store];
+    }
+
+    /** @return list<string> the last build()'s warnings so far, also when it threw */
+    public function warnings(): array
+    {
+        return $this->warnings;
     }
 
     /**
@@ -367,6 +375,12 @@ final class SeasonAvailability
             $to = $this->local($end);
             if ($from->format('Y-m-d') !== $date || $to->format('Y-m-d') !== $date) {
                 $this->warnings[] = "{$calendarName}, {$date}: a slot crosses midnight and is not saved with this date's hours";
+                continue;
+            }
+            // On the night the clocks go back, 01:30 BST + 30 min is 01:00 GMT:
+            // the local times run backwards and cannot be saved as HH:MM-HH:MM.
+            if ($from->format('H:i') >= $to->format('H:i')) {
+                $this->warnings[] = "{$calendarName}, {$date}: a slot spans the clock change and is not saved with this date's hours";
                 continue;
             }
             $hours[] = $from->format('H:i') . '-' . $to->format('H:i');

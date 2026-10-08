@@ -17,7 +17,6 @@ require_once __DIR__ . '/src/HttpTransport.php';
 require_once __DIR__ . '/src/CurlTransport.php';
 require_once __DIR__ . '/src/AcuityClient.php';
 require_once __DIR__ . '/src/ListCommand.php';
-require_once __DIR__ . '/src/SpikeCommand.php';
 require_once __DIR__ . '/src/Intervals.php';
 require_once __DIR__ . '/src/Tutor.php';
 require_once __DIR__ . '/src/Slot.php';
@@ -47,7 +46,6 @@ Options:
   --debug-tutor=ID    Print the slots per date for one calendar, each free or
                       booked, with its source (live, or stored and when);
                       writes nothing
-  --spike             Save sample API responses to spike/ (development)
   --help              Show this help
 
 Settings are read from config.php (copy config.example.php) and credentials
@@ -70,7 +68,7 @@ TXT;
  */
 function parseArgs(array $args): array
 {
-    $flags = ['help', 'list', 'spike', 'render-only'];
+    $flags = ['help', 'list', 'render-only'];
     $valued = ['out', 'debug-tutor'];
 
     // Errors never echo user input except a recognised option name: a
@@ -130,10 +128,6 @@ function main(array $argv): int
 
         if (isset($options['list'])) {
             echo ListCommand::run($client);
-            return 0;
-        }
-        if (isset($options['spike'])) {
-            echo SpikeCommand::run($client, $config, __DIR__ . '/spike', new \DateTimeImmutable());
             return 0;
         }
         $progress = static function (string $message): void {

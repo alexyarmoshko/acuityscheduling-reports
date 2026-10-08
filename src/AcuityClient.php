@@ -127,7 +127,6 @@ final class AcuityClient
         }
     }
 
-
     private function pace(): void
     {
         $now = ($this->clock)();
@@ -195,8 +194,8 @@ final class AcuityClient
 
         // Nothing from the response body is printed: any server-provided text,
         // even an identifier-shaped error code, could echo the credentials in a
-        // form redaction cannot catch (a hex key, base64 Basic auth). Use
-        // --spike or the Acuity UI to investigate a failing request.
+        // form redaction cannot catch (a hex key, base64 Basic auth). Use the
+        // Acuity UI to investigate a failing request.
         return $message;
     }
 }

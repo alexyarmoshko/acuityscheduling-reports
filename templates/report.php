@@ -36,8 +36,7 @@ $e = ReportRenderer::e(...);
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-header { padding: 16px 20px; }
-header { border-bottom: 1px solid var(--line); }
+header { padding: 16px 20px; border-bottom: 1px solid var(--line); }
 h1 { font-size: 20px; margin: 0 0 6px; }
 .meta { color: var(--muted); margin: 0; }
 .meta span { margin-right: 14px; display: inline-block; }
@@ -66,8 +65,7 @@ section.month { flex: 1; min-width: 0; }
 .num { font-weight: 600; font-size: 13px; }
 .wd { display: none; }
 .slots { list-style: none; margin: 4px 0 0; padding: 0; }
-.slot { margin: 0 0 3px; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
-.slot { background: var(--slot-bg); color: var(--slot-fg); }
+.slot { margin: 0 0 3px; padding: 2px 6px; border-radius: 4px; font-size: 13px; background: var(--slot-bg); color: var(--slot-fg); }
 .flag { font-size: 12px; font-style: italic; color: var(--muted); }
 @media (max-width: 760px) {
   main { display: block; padding: 12px 16px; }
