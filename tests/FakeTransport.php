@@ -17,7 +17,7 @@ final class FakeTransport implements HttpTransport
     /** @var list<array{status: int, headers: array<string, string>, body: string}> */
     private array $queue = [];
 
-    /** @var array<string, array{status: int, headers: array<string, string>, body: string}> */
+    /** @var array<string, array{status: int, body: mixed}> */
     private array $routes = [];
 
     public function push(int $status, mixed $body, array $headers = []): self
@@ -26,10 +26,13 @@ final class FakeTransport implements HttpTransport
         return $this;
     }
 
-    /** Responds to any URL whose path (without query) equals $path. */
+    /**
+     * Responds to any URL whose path (without query) equals $path. $body is
+     * JSON-encoded; a Closure receives the parsed query and returns the body.
+     */
     public function route(string $path, mixed $body, int $status = 200): self
     {
-        $this->routes[$path] = ['status' => $status, 'headers' => [], 'body' => json_encode($body)];
+        $this->routes[$path] = ['status' => $status, 'body' => $body];
         return $this;
     }
 
@@ -41,7 +44,12 @@ final class FakeTransport implements HttpTransport
         }
         $path = substr((string) parse_url($url, PHP_URL_PATH), strlen('/api/v1'));
         if (isset($this->routes[$path])) {
-            return $this->routes[$path];
+            $body = $this->routes[$path]['body'];
+            if ($body instanceof \Closure) {
+                parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+                $body = $body($query);
+            }
+            return ['status' => $this->routes[$path]['status'], 'headers' => [], 'body' => (string) json_encode($body)];
         }
         throw new RuntimeException("FakeTransport: no response for {$url}");
     }

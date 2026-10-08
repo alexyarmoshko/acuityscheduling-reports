@@ -18,6 +18,15 @@ require_once __DIR__ . '/src/CurlTransport.php';
 require_once __DIR__ . '/src/AcuityClient.php';
 require_once __DIR__ . '/src/ListCommand.php';
 require_once __DIR__ . '/src/SpikeCommand.php';
+require_once __DIR__ . '/src/Intervals.php';
+require_once __DIR__ . '/src/Tutor.php';
+require_once __DIR__ . '/src/Slot.php';
+require_once __DIR__ . '/src/Day.php';
+require_once __DIR__ . '/src/TutorSeason.php';
+require_once __DIR__ . '/src/Report.php';
+require_once __DIR__ . '/src/SnapshotStore.php';
+require_once __DIR__ . '/src/SeasonAvailability.php';
+require_once __DIR__ . '/src/DebugTutorCommand.php';
 require_once __DIR__ . '/src/ErrorReporter.php';
 
 const USAGE = <<<'TXT'
@@ -28,14 +37,20 @@ slots for the season set in config.php.
 
 Options:
   --out=FILE          Write the report to FILE
-                      (default: out/availability-<date>.html)
+                      (default: out/availability-YYYY-MM-DD_HHMMSS.html)
   --list              List calendars and appointment types with their IDs
-  --debug-tutor=ID    Print free and booked starts per date for one calendar
+  --debug-tutor=ID    Print free and booked starts per date for one calendar,
+                      with their source (live, or stored and when); writes
+                      nothing
   --spike             Save sample API responses to spike/ (development)
   --help              Show this help
 
 Settings are read from config.php (copy config.example.php) and credentials
 from .env (ACUITY_USER_ID, ACUITY_API_KEY).
+
+Each report run saves the hours it could see to data/availability-cache.json.
+Later runs use them for days the API no longer shows; such days are marked
+"uses saved hours as of" the run that saved them.
 
 TXT;
 
@@ -67,6 +82,9 @@ function parseArgs(array $args): array
         } elseif (in_array($name, $valued, true)) {
             if ($value === null || $value === '') {
                 throw new RuntimeException("Option --{$name} needs a value: --{$name}=...");
+            }
+            if ($name === 'debug-tutor' && preg_match('/\A[1-9]\d*\z/', $value) !== 1) {
+                throw new RuntimeException('Option --debug-tutor needs a numeric calendar ID (see --list)');
             }
             $options[$name] = $value;
         } else {
@@ -103,12 +121,25 @@ function main(array $argv): int
             echo SpikeCommand::run($client, $config, __DIR__ . '/spike', new \DateTimeImmutable());
             return 0;
         }
+        if (isset($options['debug-tutor'])) {
+            echo DebugTutorCommand::run(
+                $client,
+                $config,
+                __DIR__ . '/data',
+                (int) $options['debug-tutor'],
+                new \DateTimeImmutable(),
+                static function (string $message): void {
+                    fwrite(STDERR, $message . "\n");
+                },
+            );
+            return 0;
+        }
     } catch (\Throwable $e) {
         fwrite(STDERR, ErrorReporter::describe($e) . "\n");
         return 1;
     }
 
-    fwrite(STDERR, "Building the report is not implemented yet (plan steps 3-4).\n");
+    fwrite(STDERR, "Building the report is not implemented yet (plan step 4).\n");
     return 1;
 }
 

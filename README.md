@@ -7,8 +7,8 @@ on the right showing each day's free and booked slots, with previous/next month
 navigation. The page has no external dependencies, so it works offline and can be
 shared as a file.
 
-> **Status:** in development. `--list` and `--spike` work against the API;
-> building the HTML report is not implemented yet.
+> **Status:** in development. `--list`, `--spike` and `--debug-tutor` work
+> against the API; writing the HTML report is not implemented yet.
 
 ## Requirements
 
@@ -48,9 +48,9 @@ php acuity-report.php --help
 
 | Option | Purpose |
 |---|---|
-| `--out=FILE` | Write the report to `FILE` (default `out/availability-<date>.html`) |
+| `--out=FILE` | Write the report to `FILE` (default `out/availability-YYYY-MM-DD_HHMMSS.html`, from the run's local time, so every run keeps its own report) |
 | `--list` | List calendars and appointment types with their IDs |
-| `--debug-tutor=ID` | Print free and booked starts per date for one calendar |
+| `--debug-tutor=ID` | Print free and booked starts per date for one calendar, each marked `live` or `stored <time>`. Writes nothing |
 | `--spike` | Save sample API responses to `spike/` (development) |
 
 ## How availability is shown
@@ -61,13 +61,26 @@ them from two sources:
 - **free slots** that clients can still book, for the configured appointment types;
 - **booked appointments** on that calendar (time only; no client details are kept).
 
+Free slots exist only inside the booking window (after the minimum notice and
+before the maximum booking horizon set in `config.php`). So each report run
+saves, for every day it could see in full, that day's hours (free plus booked)
+to `data/availability-cache.json`. Later runs use these saved hours for the
+parts of a day the API no longer shows, such as past days.
+
 As a result:
 
-- Days in the past, inside the minimum-notice period, or beyond the maximum
-  booking horizon are marked **hours unknown**. Their bookings are shown, but
-  unbooked hours cannot be recovered.
+- A day that relies on saved hours is marked **uses saved hours as of** the run
+  that saved them. Its bookings always come from the current run.
+- A day that could not be read in full, and that no earlier run saw, is marked
+  **hours unknown**. Its bookings and any free slots are shown, but further
+  hours may be missing.
 - Blocked-off time, and slots hidden by Acuity settings such as resources or
   scheduling limits, do not appear.
+
+The `data/` directory holds history the API cannot return again: back it up.
+Each run keeps the previous store as `availability-cache.json.bak`. If the main
+file goes missing while the `.bak` exists, the script stops and asks you to
+restore it. Only one run at a time can use `data/`.
 
 ## Tests
 

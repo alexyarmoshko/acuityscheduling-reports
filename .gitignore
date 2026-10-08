@@ -2,6 +2,7 @@
 /config.php
 /out/
 /spike/
+/data/
 .DS_Store
 Thumbs.db
 .playwright-mcp/

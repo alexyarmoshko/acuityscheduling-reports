@@ -42,6 +42,7 @@ final class CliTest extends TestCase
         yield 'single dash' => ['-DUMMY-SECRET-123'];
         yield 'unknown lowercase name' => ['--dummy-secret'];
         yield 'known valued option without value' => ['--out'];
+        yield 'non-numeric calendar ID' => ['--debug-tutor=DUMMY-SECRET-123'];
     }
 
     #[DataProvider('rejectedArguments')]
