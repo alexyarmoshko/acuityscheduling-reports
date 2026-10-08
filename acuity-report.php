@@ -8,9 +8,17 @@ use RuntimeException;
 
 // Stack traces must never show argument values: they could include credentials.
 ini_set('zend.exception_ignore_args', '1');
+date_default_timezone_set('Europe/London');
 
 require_once __DIR__ . '/src/Env.php';
 require_once __DIR__ . '/src/Config.php';
+require_once __DIR__ . '/src/Credentials.php';
+require_once __DIR__ . '/src/HttpTransport.php';
+require_once __DIR__ . '/src/CurlTransport.php';
+require_once __DIR__ . '/src/AcuityClient.php';
+require_once __DIR__ . '/src/ListCommand.php';
+require_once __DIR__ . '/src/SpikeCommand.php';
+require_once __DIR__ . '/src/ErrorReporter.php';
 
 const USAGE = <<<'TXT'
 Usage: php acuity-report.php [options]
@@ -84,19 +92,23 @@ function main(array $argv): int
     }
 
     try {
-        Config::load(__DIR__ . '/config.php');
-        $env = Env::load(__DIR__ . '/.env');
-        foreach (['ACUITY_USER_ID', 'ACUITY_API_KEY'] as $key) {
-            if (($env[$key] ?? '') === '') {
-                throw new RuntimeException("{$key} is missing from .env");
-            }
+        $config = Config::load(__DIR__ . '/config.php');
+        $client = new AcuityClient(Credentials::fromEnv(Env::load(__DIR__ . '/.env')));
+
+        if (isset($options['list'])) {
+            echo ListCommand::run($client);
+            return 0;
         }
-    } catch (RuntimeException $e) {
-        fwrite(STDERR, 'Error: ' . $e->getMessage() . "\n");
+        if (isset($options['spike'])) {
+            echo SpikeCommand::run($client, $config, __DIR__ . '/spike', new \DateTimeImmutable());
+            return 0;
+        }
+    } catch (\Throwable $e) {
+        fwrite(STDERR, ErrorReporter::describe($e) . "\n");
         return 1;
     }
 
-    fwrite(STDERR, "Settings and credentials loaded. Fetching data is not implemented yet.\n");
+    fwrite(STDERR, "Building the report is not implemented yet (plan steps 3-4).\n");
     return 1;
 }
 

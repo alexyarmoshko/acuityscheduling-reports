@@ -7,12 +7,12 @@ on the right showing each day's free and booked slots, with previous/next month
 navigation. The page has no external dependencies, so it works offline and can be
 shared as a file.
 
-> **Status:** in development. Configuration loading works; fetching data and
-> rendering the report are not implemented yet.
+> **Status:** in development. `--list` and `--spike` work against the API;
+> building the HTML report is not implemented yet.
 
 ## Requirements
 
-- PHP 8.3 or later with the `curl` and `json` extensions
+- PHP 8.3 or later with the `curl`, `json` and `mbstring` extensions
 - An Acuity account with API access, and its API credentials
 - Composer, only to run the tests
 
@@ -34,7 +34,8 @@ shared as a file.
    `Set-Content -Encoding utf8`.
 
 2. Copy `config.example.php` to `config.php` and set your values. The example
-   file explains each setting.
+   file explains each setting. `appointment_type_ids` may stay empty at first:
+   run `php acuity-report.php --list` to find the IDs, then fill them in.
 
 Both `.env` and `config.php` are gitignored. Never commit them. The API key
 gives full read/write access to the Acuity account. This script only ever reads.

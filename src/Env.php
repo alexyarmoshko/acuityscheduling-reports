@@ -42,7 +42,7 @@ final class Env
     }
 
     /** @return array<string, string> */
-    public static function parse(string $contents): array
+    public static function parse(#[\SensitiveParameter] string $contents): array
     {
         // Windows tools often write UTF-16 (PowerShell ">", Notepad "Unicode").
         if (str_contains($contents, "\0")) {

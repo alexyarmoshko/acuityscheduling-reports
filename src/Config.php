@@ -16,7 +16,7 @@ final class Config
     ];
 
     /**
-     * @param non-empty-list<int> $appointmentTypeIds
+     * @param list<int> $appointmentTypeIds
      * @param list<int> $excludeCalendars
      */
     private function __construct(
@@ -106,15 +106,12 @@ final class Config
             throw new RuntimeException('session_window start must be before its end');
         }
 
-        $typeIds = self::idList($values['appointment_type_ids'] ?? null, 'appointment_type_ids');
-        if ($typeIds === []) {
-            throw new RuntimeException('appointment_type_ids must list at least one appointment type ID');
-        }
-
         return new self(
             $start,
             $end,
-            $typeIds,
+            // May be empty so that --list can run before the IDs are known;
+            // commands that fetch availability require at least one.
+            self::idList($values['appointment_type_ids'] ?? null, 'appointment_type_ids'),
             self::int($values, 'min_notice_hours', 0),
             self::int($values, 'max_days_ahead', 1),
             $sessionStart,

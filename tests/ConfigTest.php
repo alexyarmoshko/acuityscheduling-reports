@@ -39,6 +39,14 @@ final class ConfigTest extends TestCase
         self::assertSame([7], $config->excludeCalendars);
     }
 
+    public function testEmptyTypeIdsAllowedForList(): void
+    {
+        $values = self::valid();
+        $values['appointment_type_ids'] = [];
+
+        self::assertSame([], Config::fromArray($values)->appointmentTypeIds);
+    }
+
     public function testDuplicateIdsAreRemoved(): void
     {
         $values = self::valid();
@@ -71,7 +79,6 @@ final class ConfigTest extends TestCase
         yield 'time trailing newline' => ['session_window', ["21:30\n", '22:30']];
         yield 'month 13' => ['season_end', '2027-13'];
         yield 'start after end' => ['season_start', '2027-04'];
-        yield 'type ids empty' => ['appointment_type_ids', []];
         yield 'type ids scalar' => ['appointment_type_ids', 42];
         yield 'type id zero' => ['appointment_type_ids', [0]];
         yield 'type id string' => ['appointment_type_ids', ['42']];
