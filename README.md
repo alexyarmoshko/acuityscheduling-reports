@@ -7,7 +7,8 @@ on the right showing each day's sessions, booked or not, with previous/next mont
 navigation. The page has no external dependencies, so it works offline and can be
 shared as a file.
 
-> **Status:** complete, in final review. All commands work against the API.
+> **Version 1.0** (2026-10-08). Release notes, configuration reference and
+> known limitations: [docs/RELEASE.md](docs/RELEASE.md).
 
 ## Requirements
 
@@ -47,7 +48,8 @@ php acuity-report.php                 # writes out/availability-YYYY-MM-DD_HHMMS
 php acuity-report.php --render-only   # same page from the saved data, no API calls
 ```
 
-The script prints progress per calendar to the console. A run takes a couple of
+The script prints progress per calendar to the console and exits with `0` on
+success, `1` on an error and `2` on an invalid option. A run takes a couple of
 minutes, as requests are kept under Acuity's rate limit. Open the HTML file in
 any browser; it needs no network and can be shared as a file.
 
@@ -88,7 +90,8 @@ saves every day's sessions to `data/availability-cache.json`, cumulatively:
 A day that no run has yet seen in full is marked **hours unknown**: the sessions
 shown were seen, but further ones may be missing. Blocked-off time, and slots
 hidden by Acuity settings such as resources or scheduling limits, do not
-appear.
+appear. All times are in Europe/London, which has the same clock times as
+Europe/Dublin.
 
 **Make the first run before the season starts:** at least the minimum notice
 plus one hour before the season's first day begins (with 18 hours' notice, by
@@ -114,3 +117,10 @@ restore it. Only one run at a time can use `data/`.
 composer install
 composer test
 ```
+
+## Licence
+
+Copyright (C) 2026 Yak Shaver https://www.kayakshaver.com/
+
+Released under the GNU General Public License, version 2 or (at your option)
+any later version (`GPL-2.0-or-later`). See [LICENSE](LICENSE).

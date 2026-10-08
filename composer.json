@@ -2,7 +2,7 @@
     "name": "acuity-report/availability-report",
     "description": "Command-line report of Acuity Scheduling calendar availability as a self-contained HTML page",
     "type": "project",
-    "license": "proprietary",
+    "license": "GPL-2.0-or-later",
     "require": {
         "php": ">=8.3",
         "ext-curl": "*",
