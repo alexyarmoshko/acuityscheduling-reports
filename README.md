@@ -7,8 +7,8 @@ on the right showing each day's free and booked slots, with previous/next month
 navigation. The page has no external dependencies, so it works offline and can be
 shared as a file.
 
-> **Status:** in development. `--list`, `--spike` and `--debug-tutor` work
-> against the API; writing the HTML report is not implemented yet.
+> **Status:** in development. All commands work against the API; the report
+> page is awaiting review.
 
 ## Requirements
 
@@ -44,7 +44,12 @@ gives full read/write access to the Acuity account. This script only ever reads.
 
 ```bash
 php acuity-report.php --help
+php acuity-report.php            # writes out/availability-YYYY-MM-DD_HHMMSS.html
 ```
+
+The script prints progress per calendar to the console. A run takes a couple of
+minutes, as requests are kept under Acuity's rate limit. Open the HTML file in
+any browser; it needs no network and can be shared as a file.
 
 | Option | Purpose |
 |---|---|

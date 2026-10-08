@@ -27,6 +27,8 @@ require_once __DIR__ . '/src/Report.php';
 require_once __DIR__ . '/src/SnapshotStore.php';
 require_once __DIR__ . '/src/SeasonAvailability.php';
 require_once __DIR__ . '/src/DebugTutorCommand.php';
+require_once __DIR__ . '/src/ReportRenderer.php';
+require_once __DIR__ . '/src/ReportCommand.php';
 require_once __DIR__ . '/src/ErrorReporter.php';
 
 const USAGE = <<<'TXT'
@@ -124,26 +126,29 @@ function main(array $argv): int
             echo SpikeCommand::run($client, $config, __DIR__ . '/spike', new \DateTimeImmutable());
             return 0;
         }
+        $progress = static function (string $message): void {
+            fwrite(STDERR, $message . "\n");
+        };
         if (isset($options['debug-tutor'])) {
-            echo DebugTutorCommand::run(
-                $client,
-                $config,
-                __DIR__ . '/data',
-                (int) $options['debug-tutor'],
-                new \DateTimeImmutable(),
-                static function (string $message): void {
-                    fwrite(STDERR, $message . "\n");
-                },
-            );
+            echo DebugTutorCommand::run($client, $config, __DIR__ . '/data', (int) $options['debug-tutor'], new \DateTimeImmutable(), $progress);
             return 0;
         }
+
+        echo ReportCommand::run(
+            $client,
+            $config,
+            __DIR__ . '/data',
+            __DIR__ . '/out',
+            $options['out'] ?? null,
+            new \DateTimeImmutable(),
+            null,
+            $progress,
+        );
+        return 0;
     } catch (\Throwable $e) {
         fwrite(STDERR, ErrorReporter::describe($e) . "\n");
         return 1;
     }
-
-    fwrite(STDERR, "Building the report is not implemented yet (plan step 4).\n");
-    return 1;
 }
 
 exit(main($argv));
