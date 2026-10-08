@@ -111,31 +111,24 @@ final class ReportRendererTest extends TestCase
         self::assertSame('availability-2026-10-07_143207.html', ReportRenderer::defaultFileName(self::at('2026-10-07 14:32:07')));
     }
 
-    public function testFooterSentences(): void
+    public function testPageHasNoFooterAndNoWarnings(): void
+    {
+        $html = ReportRenderer::render(self::store(lastRun: ['warnings' => ['A run warning']]));
+
+        self::assertStringNotContainsString('<footer', $html);
+        self::assertStringNotContainsString('A run warning', $html);
+        self::assertStringNotContainsString('blocked off', $html);
+    }
+
+    public function testHeaderShowsTitleSeasonTimezoneAndGenerationTimeButNoTypes(): void
     {
         $html = ReportRenderer::render(self::store());
 
-        self::assertStringContainsString('Shown are the sessions set up in Acuity, booked or not.', $html);
-        self::assertStringContainsString('plus what earlier runs saw for the parts it could not: before 9 Oct 09:32 (too soon).', $html);
-        self::assertStringNotContainsString('too far ahead', $html);
-        self::assertStringContainsString('no run has yet seen this day in full', $html);
-        self::assertStringContainsString('Time a tutor has blocked off is not shown.', $html);
-    }
-
-    public function testFooterAddsTheHorizonWhenTheSeasonEndsAfterIt(): void
-    {
-        $html = ReportRenderer::render(self::store(lastRun: ['bookableUntil' => '2027-02-01T15:09:07+00:00']));
-
-        self::assertStringContainsString('before 9 Oct 09:32 (too soon) and after 1 Feb 15:09 (too far ahead).', $html);
-    }
-
-    public function testHeaderShowsSeasonTimezoneAndGenerationTimeButNoTypes(): void
-    {
-        $html = ReportRenderer::render(self::store());
-
-        self::assertStringContainsString('Reconstructed availability', $html);
+        self::assertStringContainsString('<h1>Tutors Availability</h1>', $html);
+        self::assertStringContainsString('<title>Tutors Availability November 2026 – March 2027</title>', $html);
         self::assertStringContainsString('November 2026 – March 2027', $html);
-        self::assertStringContainsString('Europe/London', $html);
+        self::assertStringContainsString('Time zone: Europe/Dublin', $html);
+        self::assertStringNotContainsString('Europe/London', $html);
         self::assertStringContainsString('8 Oct 2026 14:32', $html);
         self::assertStringNotContainsString('Types:', $html);
         self::assertSame('Lesson (30 min)', self::data($html)['tutors'][0]['types']);

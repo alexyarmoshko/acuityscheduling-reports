@@ -12,8 +12,8 @@ use RuntimeException;
  * Saved store → one self-contained HTML page (plan: "Report page" and step 5).
  *
  * A report run and --render-only both render from the store, so they give the
- * same page from the same file. The header and footer come from `lastRun` and
- * are rendered here, HTML-escaped. Calendars and their configured slots go into
+ * same page from the same file. The header comes from `lastRun` and is
+ * rendered here, HTML-escaped. Calendars and their configured slots go into
  * one JSON block that the page's script reads; that block is JSON-encoded with
  * <, > and & escaped, and is not HTML-escaped. Everything is pre-formatted in
  * Europe/London, so the page does no time zone conversion.
@@ -21,6 +21,9 @@ use RuntimeException;
 final class ReportRenderer
 {
     private const TEMPLATE = __DIR__ . '/../templates/report.php';
+    // Shown in the header (club). Times are computed in Europe/London, which
+    // has had the same clock times as Europe/Dublin since 1968.
+    private const TIMEZONE_LABEL = 'Europe/Dublin';
 
     public static function defaultFileName(DateTimeImmutable $runStart): string
     {
@@ -40,28 +43,11 @@ final class ReportRenderer
         }
         $tz = new DateTimeZone(SeasonAvailability::TIMEZONE);
         $generated = (new DateTimeImmutable($run['generatedAt']))->setTimezone($tz);
-        $from = (new DateTimeImmutable($run['bookableFrom']))->setTimezone($tz);
-        $until = (new DateTimeImmutable($run['bookableUntil']))->setTimezone($tz);
-        $seasonEnd = (new DateTimeImmutable($run['seasonEnd'] . '-01', $tz))->modify('first day of next month');
-
-        $readable = 'Each day shows what the latest run could read, plus what earlier runs saw for the parts it could not: before '
-            . $from->format('j M H:i') . ' (too soon)';
-        if ($seasonEnd > $until) {
-            $readable .= ' and after ' . $until->format('j M H:i') . ' (too far ahead)';
-        }
-        $footer = [
-            'Shown are the sessions set up in Acuity, booked or not.',
-            $readable . '.',
-            "'Hours unknown': no run has yet seen this day in full, so further hours may be missing.",
-            'Time a tutor has blocked off is not shown.',
-        ];
 
         $view = [
             'season' => self::monthName($run['seasonStart'], $tz) . ' – ' . self::monthName($run['seasonEnd'], $tz),
-            'timezone' => SeasonAvailability::TIMEZONE,
+            'timezone' => self::TIMEZONE_LABEL,
             'generated' => $generated->format('j M Y H:i'),
-            'footer' => $footer,
-            'warnings' => $run['warnings'],
             'json' => json_encode(
                 self::data($store, $run, $generated, $tz, $include, $exclude),
                 JSON_HEX_TAG | JSON_HEX_AMP | JSON_THROW_ON_ERROR,

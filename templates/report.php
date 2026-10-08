@@ -3,12 +3,11 @@
 declare(strict_types=1);
 
 /**
- * Report page. Included by ReportRenderer::template() with $view. Header and
- * footer strings are escaped here; tutor data arrives as one JSON block that
- * the script reads and renders with textContent only.
+ * Report page. Included by ReportRenderer::template() with $view. Header
+ * strings are escaped here; tutor data arrives as one JSON block that the
+ * script reads and renders with textContent only.
  *
- * @var array{season: string, timezone: string, generated: string,
- *            footer: list<string>, warnings: list<string>, json: string} $view
+ * @var array{season: string, timezone: string, generated: string, json: string} $view
  */
 
 use AcuityReport\ReportRenderer;
@@ -21,23 +20,23 @@ $e = ReportRenderer::e(...);
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
-<title>Availability <?= $e($view['season']) ?></title>
+<title>Tutors Availability <?= $e($view['season']) ?></title>
 <style>
 :root {
   --bg: #ffffff; --fg: #1d2330; --muted: #5d6573; --line: #d9dde3; --panel: #f4f6f8;
-  --accent: #1f5fbf; --slot-bg: #e3f4e6; --slot-fg: #1b5e2a; --warn: #8a3b00;
+  --accent: #1f5fbf; --slot-bg: #e3f4e6; --slot-fg: #1b5e2a;
   --unknown-bg: repeating-linear-gradient(45deg, #f1f1f1, #f1f1f1 6px, #e6e6e6 6px, #e6e6e6 12px);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #15181e; --fg: #e6e9ee; --muted: #9aa3b1; --line: #343a45; --panel: #1d2129;
-    --accent: #7fb0ff; --slot-bg: #173322; --slot-fg: #9be2ae; --warn: #ffbf8a;
+    --accent: #7fb0ff; --slot-bg: #173322; --slot-fg: #9be2ae;
     --unknown-bg: repeating-linear-gradient(45deg, #23272f, #23272f 6px, #2b3039 6px, #2b3039 12px);
   }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-header, footer { padding: 16px 20px; }
+header { padding: 16px 20px; }
 header { border-bottom: 1px solid var(--line); }
 h1 { font-size: 20px; margin: 0 0 6px; }
 .meta { color: var(--muted); margin: 0; }
@@ -70,9 +69,6 @@ section.month { flex: 1; min-width: 0; }
 .slot { margin: 0 0 3px; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
 .slot { background: var(--slot-bg); color: var(--slot-fg); }
 .flag { font-size: 12px; font-style: italic; color: var(--muted); }
-footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
-footer p { margin: 0 0 6px; }
-.warnings { color: var(--warn); }
 @media (max-width: 760px) {
   main { display: block; padding: 12px 16px; }
   nav.tutors { display: none; }
@@ -81,7 +77,7 @@ footer p { margin: 0 0 6px; }
   .weekday, .cell.blank, .cell.empty { display: none; }
   .cell { min-height: 0; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 6px; }
   .wd { display: inline; font-weight: 400; color: var(--muted); }
-  header, footer { padding: 12px 16px; }
+  header { padding: 12px 16px; }
 }
 @media print {
   nav.tutors, .tutor-select, .month-bar button { display: none; }
@@ -92,10 +88,9 @@ footer p { margin: 0 0 6px; }
 </head>
 <body>
 <header>
-  <h1>Reconstructed availability</h1>
+  <h1>Tutors Availability</h1>
   <p class="meta">
     <span>Season: <?= $e($view['season']) ?></span>
-
     <span>Time zone: <?= $e($view['timezone']) ?></span>
     <span>Generated: <?= $e($view['generated']) ?></span>
   </p>
@@ -115,19 +110,6 @@ footer p { margin: 0 0 6px; }
     <div class="grid" id="grid"></div>
   </section>
 </main>
-<footer>
-<?php foreach ($view['footer'] as $sentence): ?>
-  <p><?= $e($sentence) ?></p>
-<?php endforeach; ?>
-<?php if ($view['warnings'] !== []): ?>
-  <div class="warnings">
-    <p><strong>Warnings</strong></p>
-<?php foreach ($view['warnings'] as $warning): ?>
-    <p><?= $e($warning) ?></p>
-<?php endforeach; ?>
-  </div>
-<?php endif; ?>
-</footer>
 <script type="application/json" id="report-data"><?= $view['json'] ?></script>
 <script>
 (function () {
